@@ -1,7 +1,6 @@
-import { Injectable } from '../decorators/core/injectable.decorator';
-import { Optional } from '../decorators/core/optional.decorator';
+import { Injectable, Optional } from '../decorators/core';
 import { clc, yellow } from '../utils/cli-colors.util';
-import { isPlainObject } from '../utils/shared.utils';
+import { isPlainObject, isString } from '../utils/shared.utils';
 import { LoggerService, LogLevel } from './logger.service';
 import { isLogLevelEnabled } from './utils';
 
@@ -183,25 +182,60 @@ export class ConsoleLogger implements LoggerService {
     logLevel: LogLevel = 'log',
     writeStreamType?: 'stdout' | 'stderr',
   ) {
-    const color = this.getColorByLogLevel(logLevel);
     messages.forEach(message => {
-      const output = isPlainObject(message)
-        ? `${color('Object:')}\n${JSON.stringify(
-            message,
-            (key, value) =>
-              typeof value === 'bigint' ? value.toString() : value,
-            2,
-          )}\n`
-        : color(message as string);
-
-      const pidMessage = color(`[Nest] ${process.pid}  - `);
-      const contextMessage = context ? yellow(`[${context}] `) : '';
+      const pidMessage = this.formatPid(process.pid);
+      const contextMessage = this.formatContext(context);
       const timestampDiff = this.updateAndGetTimestampDiff();
-      const formattedLogLevel = color(logLevel.toUpperCase().padStart(7, ' '));
-      const computedMessage = `${pidMessage}${this.getTimestamp()} ${formattedLogLevel} ${contextMessage}${output}${timestampDiff}\n`;
+      const formattedLogLevel = logLevel.toUpperCase().padStart(7, ' ');
+      const formattedMessage = this.formatMessage(
+        logLevel,
+        message,
+        pidMessage,
+        formattedLogLevel,
+        contextMessage,
+        timestampDiff,
+      );
 
-      process[writeStreamType ?? 'stdout'].write(computedMessage);
+      process[writeStreamType ?? 'stdout'].write(formattedMessage);
     });
+  }
+
+  protected formatPid(pid: number) {
+    return `[Nest] ${pid}  - `;
+  }
+
+  protected formatContext(context: string): string {
+    return context ? yellow(`[${context}] `) : '';
+  }
+
+  protected formatMessage(
+    logLevel: LogLevel,
+    message: unknown,
+    pidMessage: string,
+    formattedLogLevel: string,
+    contextMessage: string,
+    timestampDiff: string,
+  ) {
+    const output = this.stringifyMessage(message, logLevel);
+    pidMessage = this.colorize(pidMessage, logLevel);
+    formattedLogLevel = this.colorize(formattedLogLevel, logLevel);
+    return `${pidMessage}${this.getTimestamp()} ${formattedLogLevel} ${contextMessage}${output}${timestampDiff}\n`;
+  }
+
+  protected stringifyMessage(message: unknown, logLevel: LogLevel) {
+    return isPlainObject(message) || Array.isArray(message)
+      ? `${this.colorize('Object:', logLevel)}\n${JSON.stringify(
+          message,
+          (key, value) =>
+            typeof value === 'bigint' ? value.toString() : value,
+          2,
+        )}\n`
+      : this.colorize(message as string, logLevel);
+  }
+
+  protected colorize(message: string, logLevel: LogLevel) {
+    const color = this.getColorByLogLevel(logLevel);
+    return color(message);
   }
 
   protected printStackTrace(stack: string) {
@@ -215,10 +249,14 @@ export class ConsoleLogger implements LoggerService {
     const includeTimestamp =
       ConsoleLogger.lastTimestampAt && this.options?.timestamp;
     const result = includeTimestamp
-      ? yellow(` +${Date.now() - ConsoleLogger.lastTimestampAt}ms`)
+      ? this.formatTimestampDiff(Date.now() - ConsoleLogger.lastTimestampAt)
       : '';
     ConsoleLogger.lastTimestampAt = Date.now();
     return result;
+  }
+
+  protected formatTimestampDiff(timestampDiff: number) {
+    return yellow(` +${timestampDiff}ms`);
   }
 
   private getContextAndMessagesToPrint(args: unknown[]) {
@@ -226,7 +264,7 @@ export class ConsoleLogger implements LoggerService {
       return { messages: args, context: this.context };
     }
     const lastElement = args[args.length - 1];
-    const isContext = typeof lastElement === 'string';
+    const isContext = isString(lastElement);
     if (!isContext) {
       return { messages: args, context: this.context };
     }
@@ -242,7 +280,7 @@ export class ConsoleLogger implements LoggerService {
       return { messages, context };
     }
     const lastElement = messages[messages.length - 1];
-    const isStack = typeof lastElement === 'string';
+    const isStack = isString(lastElement);
     if (!isStack) {
       return { messages, context };
     }

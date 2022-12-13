@@ -1,4 +1,4 @@
-import { expect } from 'chai';
+import { assert, expect } from 'chai';
 import * as sinon from 'sinon';
 import { NO_MESSAGE_HANDLER } from '../../constants';
 import { BaseRpcContext } from '../../ctx-host/base-rpc.context';
@@ -51,6 +51,10 @@ describe('ServerRMQ', () => {
     it('should bind "disconnect" event to handler', () => {
       server.listen(callbackSpy);
       expect(onStub.getCall(1).args[0]).to.be.equal('disconnect');
+    });
+    it('should bind "connectFailed" event to handler', () => {
+      server.listen(callbackSpy);
+      expect(onStub.getCall(2).args[0]).to.be.equal('connectFailed');
     });
     describe('when "start" throws an exception', () => {
       it('should call callback with a thrown error as an argument', () => {
@@ -122,6 +126,22 @@ describe('ServerRMQ', () => {
       });
       await server.handleMessage(msg, '');
       expect(handler.calledOnce).to.be.true;
+    });
+    it('should not throw if the message is an invalid json', async () => {
+      const invalidMsg = {
+        content: {
+          toString: () => 'd',
+        },
+        properties: { correlationId: 1 },
+      };
+      const handler = sinon.spy();
+      (server as any).messageHandlers = objectToMap({
+        [pattern]: handler as any,
+      });
+
+      return server.handleMessage(invalidMsg, '').catch(() => {
+        assert.fail('Was not supposed to throw an error');
+      });
     });
   });
   describe('setupChannel', () => {

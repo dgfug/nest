@@ -1,24 +1,29 @@
 import {
   HttpStatus,
   Logger,
+  RawBodyRequest,
   RequestMethod,
   StreamableFile,
   VersioningOptions,
   VersioningType,
+  VERSION_NEUTRAL,
 } from '@nestjs/common';
-import { VersionValue, VERSION_NEUTRAL } from '@nestjs/common/interfaces';
+import { VersionValue } from '@nestjs/common/interfaces';
 import {
   CorsOptions,
   CorsOptionsDelegate,
 } from '@nestjs/common/interfaces/external/cors-options.interface';
 import { loadPackage } from '@nestjs/common/utils/load-package.util';
+import { isString, isUndefined } from '@nestjs/common/utils/shared.utils';
 import { AbstractHttpAdapter } from '@nestjs/core/adapters/http-adapter';
 import {
   fastify,
+  FastifyBodyParser,
   FastifyInstance,
   FastifyLoggerInstance,
   FastifyPluginAsync,
   FastifyPluginCallback,
+  FastifyRegister,
   FastifyReply,
   FastifyRequest,
   FastifyServerOptions,
@@ -37,6 +42,8 @@ import {
   InjectOptions,
   Response as LightMyRequestResponse,
 } from 'light-my-request';
+// `querystring` is used internally in fastify for registering urlencoded body parser.
+import { parse as querystringParse } from 'querystring';
 import {
   FastifyStaticOptions,
   PointOfViewOptions,
@@ -65,7 +72,11 @@ type FastifyHttpsOptions<
   https: https.ServerOptions;
 };
 
-type VersionedRoute = Function & {
+type VersionedRoute<TRequest, TResponse> = ((
+  req: TRequest,
+  res: TResponse,
+  next: Function,
+) => Function) & {
   version: VersionValue;
   versioningOptions: VersioningOptions;
 };
@@ -107,30 +118,34 @@ export class FastifyAdapter<
   private readonly versionConstraint = {
     name: 'version',
     validate(value: unknown) {
-      if (typeof value !== 'string' && !Array.isArray(value)) {
+      if (!isString(value) && !Array.isArray(value)) {
         throw new Error(
           'Version constraint should be a string or an array of strings.',
         );
       }
     },
     storage() {
-      const versions = new Map();
+      const versions = new Map<string, unknown>();
       return {
         get(version: string | Array<string>) {
+          if (Array.isArray(version)) {
+            return versions.get(version.find(v => versions.has(v))) || null;
+          }
           return versions.get(version) || null;
         },
-        set(
-          versionOrVersions: string | Array<string>,
-          store: Map<string, any>,
-        ) {
-          const storeVersionConstraint = version =>
+        set(versionOrVersions: string | Array<string>, store: unknown) {
+          const storeVersionConstraint = (version: string) =>
             versions.set(version, store);
           if (Array.isArray(versionOrVersions))
             versionOrVersions.forEach(storeVersionConstraint);
           else storeVersionConstraint(versionOrVersions);
         },
         del(version: string | Array<string>) {
-          versions.delete(version);
+          if (Array.isArray(version)) {
+            version.forEach(v => versions.delete(v));
+          } else {
+            versions.delete(version);
+          }
         },
         empty() {
           versions.clear();
@@ -149,12 +164,9 @@ export class FastifyAdapter<
           ? acceptHeaderValue.split(';')[1]
           : '';
 
-        if (acceptHeaderVersionParameter) {
-          const headerVersion = acceptHeaderVersionParameter.split(
-            this.versioningOptions.key,
-          )[1];
-          return headerVersion;
-        }
+        return isUndefined(acceptHeaderVersionParameter)
+          ? VERSION_NEUTRAL // No version was supplied
+          : acceptHeaderVersionParameter.split(this.versioningOptions.key)[1];
       }
       // Header Versioning Handler
       else if (this.versioningOptions.type === VersioningType.HEADER) {
@@ -162,9 +174,13 @@ export class FastifyAdapter<
           req.headers?.[this.versioningOptions.header] ||
           req.headers?.[this.versioningOptions.header.toLowerCase()];
 
-        if (customHeaderVersionParameter) {
-          return customHeaderVersionParameter;
-        }
+        return isUndefined(customHeaderVersionParameter)
+          ? VERSION_NEUTRAL // No version was supplied
+          : customHeaderVersionParameter;
+      }
+      // Custom Versioning Handler
+      else if (this.versioningOptions.type === VersioningType.CUSTOM) {
+        return this.versioningOptions.extractor(req);
       }
       return undefined;
     },
@@ -210,8 +226,16 @@ export class FastifyAdapter<
     hostname: string,
     callback?: () => void,
   ): void;
-  public listen(port: string | number, ...args: any[]): Promise<string> {
-    return this.instance.listen(port, ...args);
+  public listen(port: string | number, ...args: any[]): void {
+    const isFirstArgTypeofFunction = typeof args[0] === 'function';
+    const callback = isFirstArgTypeofFunction ? args[0] : args[1];
+    const options: Record<string, any> = {
+      port: +port,
+    };
+    if (!isFirstArgTypeofFunction) {
+      options.host = args[0];
+    }
+    return this.instance.listen(options, callback);
   }
 
   public get(...args: any[]) {
@@ -246,11 +270,11 @@ export class FastifyAdapter<
     handler: Function,
     version: VersionValue,
     versioningOptions: VersioningOptions,
-  ) {
+  ): VersionedRoute<TRequest, TReply> {
     if (!this.versioningOptions) {
       this.versioningOptions = versioningOptions;
     }
-    const versionedRoute = handler as VersionedRoute;
+    const versionedRoute = handler as VersionedRoute<TRequest, TReply>;
     versionedRoute.version = version;
     return versionedRoute;
   }
@@ -281,11 +305,23 @@ export class FastifyAdapter<
     }
     if (body instanceof StreamableFile) {
       const streamHeaders = body.getHeaders();
-      if (fastifyReply.getHeader('Content-Type') === undefined) {
+      if (
+        fastifyReply.getHeader('Content-Type') === undefined &&
+        streamHeaders.type !== undefined
+      ) {
         fastifyReply.header('Content-Type', streamHeaders.type);
       }
-      if (fastifyReply.getHeader('Content-Disposition') === undefined) {
+      if (
+        fastifyReply.getHeader('Content-Disposition') === undefined &&
+        streamHeaders.disposition !== undefined
+      ) {
         fastifyReply.header('Content-Disposition', streamHeaders.disposition);
+      }
+      if (
+        fastifyReply.getHeader('Content-Length') === undefined &&
+        streamHeaders.length !== undefined
+      ) {
+        fastifyReply.header('Content-Length', streamHeaders.length);
       }
       body = body.getStream();
     }
@@ -298,6 +334,10 @@ export class FastifyAdapter<
       return response;
     }
     return (response as TReply).code(statusCode);
+  }
+
+  public end(response: TReply, message?: string) {
+    response.raw.end(message);
   }
 
   public render(
@@ -329,7 +369,7 @@ export class FastifyAdapter<
     return this.instance as unknown as T;
   }
 
-  public register<TRegister extends Parameters<TInstance['register']>>(
+  public register<TRegister extends Parameters<FastifyRegister<TInstance>>>(
     plugin: TRegister['0'],
     opts?: TRegister['1'],
   ) {
@@ -362,26 +402,30 @@ export class FastifyAdapter<
 
   public useStaticAssets(options: FastifyStaticOptions) {
     return this.register(
-      loadPackage('fastify-static', 'FastifyAdapter.useStaticAssets()', () =>
-        require('fastify-static'),
+      loadPackage('@fastify/static', 'FastifyAdapter.useStaticAssets()', () =>
+        require('@fastify/static'),
       ),
       options,
     );
   }
 
   public setViewEngine(options: PointOfViewOptions | string) {
-    if (typeof options === 'string') {
+    if (isString(options)) {
       new Logger('FastifyAdapter').error(
         "setViewEngine() doesn't support a string argument.",
       );
       process.exit(1);
     }
     return this.register(
-      loadPackage('point-of-view', 'FastifyAdapter.setViewEngine()', () =>
-        require('point-of-view'),
+      loadPackage('@fastify/view', 'FastifyAdapter.setViewEngine()', () =>
+        require('@fastify/view'),
       ),
       options,
     );
+  }
+
+  public isHeadersSent(response: TReply): boolean {
+    return response.sent;
   }
 
   public setHeader(response: TReply, name: string, value: string) {
@@ -403,14 +447,20 @@ export class FastifyAdapter<
   }
 
   public enableCors(options: CorsOptions | CorsOptionsDelegate<TRequest>) {
-    this.register(import('fastify-cors'), options);
+    this.register(
+      import('@fastify/cors') as Parameters<TInstance['register']>[0],
+      options,
+    );
   }
 
-  public registerParserMiddleware() {
+  public registerParserMiddleware(prefix?: string, rawBody?: boolean) {
     if (this._isParserRegistered) {
       return;
     }
-    this.register(import('fastify-formbody'));
+
+    this.registerUrlencodedContentParser(rawBody);
+    this.registerJsonContentParser(rawBody);
+
     this._isParserRegistered = true;
   }
 
@@ -421,11 +471,14 @@ export class FastifyAdapter<
       await this.registerMiddie();
     }
     return (path: string, callback: Function) => {
-      const normalizedPath = path.endsWith('/*')
+      let normalizedPath = path.endsWith('/*')
         ? `${path.slice(0, -1)}(.*)`
         : path;
 
-      // The following type assertion is valid as we use import('middie') rather than require('middie')
+      // Fallback to "(.*)" to support plugins like GraphQL
+      normalizedPath = normalizedPath === '/(.*)' ? '(.*)' : normalizedPath;
+
+      // The following type assertion is valid as we use import('@fastify/middie') rather than require('@fastify/middie')
       // ref https://github.com/fastify/middie/pull/55
       this.instance.use(
         normalizedPath,
@@ -455,9 +508,57 @@ export class FastifyAdapter<
     return !('status' in response);
   }
 
+  private registerJsonContentParser(rawBody?: boolean) {
+    const { bodyLimit } = this.getInstance().initialConfig;
+
+    this.getInstance().addContentTypeParser<Buffer>(
+      'application/json',
+      { parseAs: 'buffer', bodyLimit },
+      (
+        req: RawBodyRequest<FastifyRequest<unknown, TServer, TRawRequest>>,
+        body: Buffer,
+        done,
+      ) => {
+        if (rawBody === true && Buffer.isBuffer(body)) {
+          req.rawBody = body;
+        }
+
+        const { onProtoPoisoning, onConstructorPoisoning } =
+          this.instance.initialConfig;
+        const defaultJsonParser = this.instance.getDefaultJsonParser(
+          onProtoPoisoning || 'error',
+          onConstructorPoisoning || 'error',
+        ) as FastifyBodyParser<string | Buffer, TServer>;
+        defaultJsonParser(req, body, done);
+      },
+    );
+  }
+
+  private registerUrlencodedContentParser(rawBody?: boolean) {
+    const { bodyLimit } = this.getInstance().initialConfig;
+
+    this.getInstance().addContentTypeParser<Buffer>(
+      'application/x-www-form-urlencoded',
+      { parseAs: 'buffer', bodyLimit },
+      (
+        req: RawBodyRequest<FastifyRequest<unknown, TServer, TRawRequest>>,
+        body: Buffer,
+        done,
+      ) => {
+        if (rawBody === true && Buffer.isBuffer(body)) {
+          req.rawBody = body;
+        }
+
+        done(null, querystringParse(body.toString()));
+      },
+    );
+  }
+
   private async registerMiddie() {
     this.isMiddieRegistered = true;
-    await this.register(import('middie'));
+    await this.register(
+      import('@fastify/middie') as Parameters<TInstance['register']>[0],
+    );
   }
 
   private getRequestOriginalUrl(rawRequest: TRawRequest) {
@@ -477,7 +578,7 @@ export class FastifyAdapter<
   ) {
     const handlerRef = args[args.length - 1];
     const isVersioned =
-      typeof handlerRef.version !== 'undefined' &&
+      !isUndefined(handlerRef.version) &&
       handlerRef.version !== VERSION_NEUTRAL;
 
     if (isVersioned) {

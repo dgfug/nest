@@ -7,6 +7,7 @@ import {
   PATTERN_HANDLER_METADATA,
   PATTERN_METADATA,
   TRANSPORT_METADATA,
+  PATTERN_EXTRAS_METADATA,
 } from './constants';
 import { Transport } from './enums';
 import { PatternHandler } from './enums/pattern-handler.enum';
@@ -19,11 +20,12 @@ export interface ClientProperties {
 }
 
 export interface EventOrMessageListenerDefinition {
-  pattern: PatternMetadata;
+  patterns: PatternMetadata[];
   methodKey: string;
   isEventHandler: boolean;
   targetCallback: (...args: any[]) => any;
   transport?: Transport;
+  extras?: Record<string, any>;
 }
 
 export interface MessageRequestProperties {
@@ -56,13 +58,15 @@ export class ListenerMetadataExplorer {
     if (isUndefined(handlerType)) {
       return;
     }
-    const pattern = Reflect.getMetadata(PATTERN_METADATA, targetCallback);
+    const patterns = Reflect.getMetadata(PATTERN_METADATA, targetCallback);
     const transport = Reflect.getMetadata(TRANSPORT_METADATA, targetCallback);
+    const extras = Reflect.getMetadata(PATTERN_EXTRAS_METADATA, targetCallback);
     return {
       methodKey,
       targetCallback,
-      pattern,
+      patterns,
       transport,
+      extras,
       isEventHandler: handlerType === PatternHandler.EVENT,
     };
   }

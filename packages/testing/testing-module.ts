@@ -9,6 +9,7 @@ import {
 import { NestMicroserviceOptions } from '@nestjs/common/interfaces/microservices/nest-microservice-options.interface';
 import { NestApplicationContextOptions } from '@nestjs/common/interfaces/nest-application-context-options.interface';
 import { loadPackage } from '@nestjs/common/utils/load-package.util';
+import { isUndefined } from '@nestjs/common/utils/shared.utils';
 import {
   AbstractHttpAdapter,
   NestApplication,
@@ -28,20 +29,43 @@ export class TestingModule extends NestApplicationContext {
     super(container, scope, contextModule);
   }
 
+  private isHttpServer(
+    serverOrOptions:
+      | HttpServer
+      | AbstractHttpAdapter
+      | NestApplicationOptions
+      | undefined,
+  ): serverOrOptions is HttpServer | AbstractHttpAdapter {
+    return !!(serverOrOptions && (serverOrOptions as HttpServer).patch);
+  }
+
   public createNestApplication<T extends INestApplication = INestApplication>(
-    httpAdapter?: HttpServer | AbstractHttpAdapter,
+    httpAdapter: HttpServer | AbstractHttpAdapter,
+    options?: NestApplicationOptions,
+  ): T;
+  public createNestApplication<T extends INestApplication = INestApplication>(
+    options?: NestApplicationOptions,
+  ): T;
+  public createNestApplication<T extends INestApplication = INestApplication>(
+    serverOrOptions:
+      | HttpServer
+      | AbstractHttpAdapter
+      | NestApplicationOptions
+      | undefined,
     options?: NestApplicationOptions,
   ): T {
-    httpAdapter = httpAdapter || this.createHttpAdapter();
+    const [httpAdapter, appOptions] = this.isHttpServer(serverOrOptions)
+      ? [serverOrOptions, options]
+      : [this.createHttpAdapter(), serverOrOptions];
 
-    this.applyLogger(options);
+    this.applyLogger(appOptions);
     this.container.setHttpAdapter(httpAdapter);
 
     const instance = new NestApplication(
       this.container,
       httpAdapter,
       this.applicationConfig,
-      options,
+      appOptions,
     );
     return this.createAdapterProxy<T>(instance, httpAdapter);
   }
@@ -72,7 +96,7 @@ export class TestingModule extends NestApplicationContext {
   }
 
   private applyLogger(options: NestApplicationContextOptions | undefined) {
-    if (!options || !options.logger) {
+    if (!options || isUndefined(options.logger)) {
       return;
     }
     Logger.overrideLogger(options.logger);

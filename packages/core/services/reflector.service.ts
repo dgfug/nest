@@ -23,7 +23,7 @@ export class Reflector {
     metadataKey: TKey,
     target: Type<any> | Function,
   ): TResult {
-    return Reflect.getMetadata(metadataKey, target) as TResult;
+    return Reflect.getMetadata(metadataKey, target);
   }
 
   /**
@@ -38,7 +38,7 @@ export class Reflector {
     targets: (Type<any> | Function)[],
   ): TResult {
     return (targets || []).map(target =>
-      Reflect.getMetadata(metadataKey, target),
+      this.get(metadataKey, target),
     ) as TResult;
   }
 
@@ -86,9 +86,12 @@ export class Reflector {
     metadataKey: TKey,
     targets: (Type<any> | Function)[],
   ): TResult {
-    const metadataCollection = this.getAll(metadataKey, targets).filter(
-      item => item !== undefined,
-    );
-    return metadataCollection[0];
+    for (const target of targets) {
+      const result = this.get(metadataKey, target);
+      if (result !== undefined) {
+        return result;
+      }
+    }
+    return undefined;
   }
 }

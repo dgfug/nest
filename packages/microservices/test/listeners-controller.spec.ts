@@ -21,8 +21,11 @@ describe('ListenersController', () => {
     metadataExplorer: ListenerMetadataExplorer,
     server: any,
     serverTCP: any,
+    serverCustom: any,
+    customTransport: Symbol,
     addSpy: sinon.SinonSpy,
     addSpyTCP: sinon.SinonSpy,
+    addSpyCustom: sinon.SinonSpy,
     proxySpy: sinon.SinonSpy,
     container: NestContainer,
     injector: Injector,
@@ -61,12 +64,18 @@ describe('ListenersController', () => {
       addHandler: addSpyTCP,
       transportId: Transport.TCP,
     };
+    addSpyCustom = sinon.spy();
+    customTransport = Symbol();
+    serverCustom = {
+      addHandler: addSpyCustom,
+      transportId: customTransport,
+    };
   });
 
   describe('registerPatternHandlers', () => {
     const handlers = [
-      { pattern: 'test', targetCallback: 'tt' },
-      { pattern: 'test2', targetCallback: '2', isEventHandler: true },
+      { patterns: ['test'], targetCallback: 'tt' },
+      { patterns: ['test2'], targetCallback: '2', isEventHandler: true },
     ];
 
     beforeEach(() => {
@@ -80,7 +89,7 @@ describe('ListenersController', () => {
     it(`should call "addHandler" method of server for each pattern handler with same transport`, () => {
       const serverHandlers = [
         {
-          pattern: { cmd: 'test' },
+          patterns: [{ cmd: 'test' }],
           targetCallback: 'tt',
           transport: Transport.TCP,
         },
@@ -92,8 +101,12 @@ describe('ListenersController', () => {
     });
     it(`should call "addHandler" method of server without transportID for each pattern handler with any transport value`, () => {
       const serverHandlers = [
-        { pattern: { cmd: 'test' }, targetCallback: 'tt' },
-        { pattern: 'test2', targetCallback: '2', transport: Transport.KAFKA },
+        { patterns: [{ cmd: 'test' }], targetCallback: 'tt' },
+        {
+          patterns: ['test2'],
+          targetCallback: '2',
+          transport: Transport.KAFKA,
+        },
       ];
       explorer.expects('explore').returns(serverHandlers);
       instance.registerPatternHandlers(new InstanceWrapper(), server, '');
@@ -101,10 +114,14 @@ describe('ListenersController', () => {
     });
     it(`should call "addHandler" method of server with transportID for each pattern handler with self transport and without transport`, () => {
       const serverHandlers = [
-        { pattern: 'test', targetCallback: 'tt' },
-        { pattern: 'test2', targetCallback: '2', transport: Transport.KAFKA },
+        { patterns: ['test'], targetCallback: 'tt' },
         {
-          pattern: { cmd: 'test3' },
+          patterns: ['test2'],
+          targetCallback: '2',
+          transport: Transport.KAFKA,
+        },
+        {
+          patterns: [{ cmd: 'test3' }],
           targetCallback: '3',
           transport: Transport.TCP,
         },
@@ -117,6 +134,44 @@ describe('ListenersController', () => {
       explorer.expects('explore').returns(handlers);
       instance.registerPatternHandlers(new InstanceWrapper(), serverTCP, '');
       expect(addSpyTCP.calledTwice).to.be.true;
+    });
+    it(`should call "addHandler" method of server with custom transportID for pattern handler with the same custom token`, () => {
+      const serverHandlers = [
+        {
+          patterns: [{ cmd: 'test' }],
+          targetCallback: 'tt',
+          transport: customTransport,
+        },
+        {
+          patterns: ['test2'],
+          targetCallback: '2',
+          transport: Transport.KAFKA,
+        },
+      ];
+
+      explorer.expects('explore').returns(serverHandlers);
+      instance.registerPatternHandlers(new InstanceWrapper(), serverCustom, '');
+      expect(addSpyCustom.calledOnce).to.be.true;
+    });
+    it(`should call "addHandler" method of server with extras data`, () => {
+      const serverHandlers = [
+        {
+          patterns: ['test'],
+          targetCallback: 'tt',
+          extras: { param: 'value' },
+        },
+      ];
+      explorer.expects('explore').returns(serverHandlers);
+      instance.registerPatternHandlers(new InstanceWrapper(), serverTCP, '');
+      expect(addSpyTCP.calledOnce).to.be.true;
+      expect(
+        addSpyTCP.calledWith(
+          sinon.match.any,
+          sinon.match.any,
+          sinon.match.any,
+          sinon.match({ param: 'value' }),
+        ),
+      ).to.be.true;
     });
     describe('when request scoped', () => {
       it(`should call "addHandler" with deferred proxy`, () => {
@@ -154,7 +209,7 @@ describe('ListenersController', () => {
       const module = {
         controllers: new Map(),
       } as any;
-      const pattern = {};
+      const patterns = [{}];
       const wrapper = new InstanceWrapper({ instance: { [methodKey]: {} } });
 
       it('should pass all arguments to the proxy chain', async () => {
@@ -163,7 +218,7 @@ describe('ListenersController', () => {
           .callsFake(() => Promise.resolve({}));
         const handler = instance.createRequestScopedHandler(
           wrapper,
-          pattern,
+          patterns,
           module,
           moduleKey,
           methodKey,
@@ -182,7 +237,7 @@ describe('ListenersController', () => {
       const module = {
         controllers: new Map(),
       } as any;
-      const pattern = {};
+      const patterns = [{}];
       const wrapper = new InstanceWrapper({ instance: { [methodKey]: {} } });
 
       it('should delegete error to exception filters', async () => {
@@ -191,7 +246,7 @@ describe('ListenersController', () => {
         });
         const handler = instance.createRequestScopedHandler(
           wrapper,
-          pattern,
+          patterns,
           module,
           moduleKey,
           methodKey,
@@ -208,7 +263,7 @@ describe('ListenersController', () => {
   });
 
   describe('assignClientToInstance', () => {
-    it('should assing client to instance', () => {
+    it('should assign client to instance', () => {
       const propertyKey = 'key';
       const object = {};
       const client = { test: true };

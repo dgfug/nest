@@ -4,15 +4,11 @@ import {
   PATH_METADATA,
   VERSION_METADATA,
 } from '@nestjs/common/constants';
-import { RequestMethod } from '@nestjs/common/enums/request-method.enum';
-import { VersioningType } from '@nestjs/common/enums/version-type.enum';
+import { RequestMethod, VersioningType } from '@nestjs/common/enums';
 import { InternalServerErrorException } from '@nestjs/common/exceptions';
 import { Controller } from '@nestjs/common/interfaces/controllers/controller.interface';
 import { Type } from '@nestjs/common/interfaces/type.interface';
-import {
-  VersionValue,
-  VERSION_NEUTRAL,
-} from '@nestjs/common/interfaces/version-options.interface';
+import { VersionValue } from '@nestjs/common/interfaces/version-options.interface';
 import { Logger } from '@nestjs/common/services/logger.service';
 import {
   addLeadingSlash,
@@ -120,7 +116,7 @@ export class RouterExplorer {
     const path = Reflect.getMetadata(PATH_METADATA, metatype);
 
     if (isUndefined(path)) {
-      throw new UnknownRequestMappingException();
+      throw new UnknownRequestMappingException(metatype);
     }
     if (Array.isArray(path)) {
       return path.map(p => addLeadingSlash(p));
@@ -332,80 +328,12 @@ export class RouterExplorer {
     routePathMetadata: RoutePathMetadata,
     handler: Function,
   ) {
-    const { versioningOptions } = routePathMetadata;
     const version = this.routePathFactory.getVersion(routePathMetadata);
-    if (router?.applyVersionFilter) {
-      return router.applyVersionFilter(handler, version, versioningOptions);
-    }
-    /**
-     * This can be removed in the next major release.
-     * Left for backward-compatibility.
-     */
-    return <TRequest extends Record<string, any> = any, TResponse = any>(
-      req: TRequest,
-      res: TResponse,
-      next: () => void,
-    ) => {
-      if (version === VERSION_NEUTRAL) {
-        return handler(req, res, next);
-      }
-      // URL Versioning is done via the path, so the filter continues forward
-      if (versioningOptions.type === VersioningType.URI) {
-        return handler(req, res, next);
-      }
-      // Media Type (Accept Header) Versioning Handler
-      if (versioningOptions.type === VersioningType.MEDIA_TYPE) {
-        const MEDIA_TYPE_HEADER = 'Accept';
-        const acceptHeaderValue: string | undefined =
-          req.headers?.[MEDIA_TYPE_HEADER] ||
-          req.headers?.[MEDIA_TYPE_HEADER.toLowerCase()];
-
-        const acceptHeaderVersionParameter = acceptHeaderValue
-          ? acceptHeaderValue.split(';')[1]
-          : '';
-
-        if (acceptHeaderVersionParameter) {
-          const headerVersion = acceptHeaderVersionParameter.split(
-            versioningOptions.key,
-          )[1];
-
-          if (Array.isArray(version)) {
-            if (version.includes(headerVersion)) {
-              return handler(req, res, next);
-            }
-          } else if (isString(version)) {
-            if (version === headerVersion) {
-              return handler(req, res, next);
-            }
-          }
-        }
-      }
-      // Header Versioning Handler
-      else if (versioningOptions.type === VersioningType.HEADER) {
-        const customHeaderVersionParameter: string | undefined =
-          req.headers?.[versioningOptions.header] ||
-          req.headers?.[versioningOptions.header.toLowerCase()];
-
-        if (customHeaderVersionParameter) {
-          if (Array.isArray(version)) {
-            if (version.includes(customHeaderVersionParameter)) {
-              return handler(req, res, next);
-            }
-          } else if (isString(version)) {
-            if (version === customHeaderVersionParameter) {
-              return handler(req, res, next);
-            }
-          }
-        }
-      }
-
-      if (!next) {
-        throw new InternalServerErrorException(
-          'HTTP adapter does not support filtering on version',
-        );
-      }
-      return next();
-    };
+    return router.applyVersionFilter(
+      handler,
+      version,
+      routePathMetadata.versioningOptions,
+    );
   }
 
   private createCallbackProxy(
@@ -496,7 +424,10 @@ export class RouterExplorer {
         writable: false,
         configurable: false,
       });
-      this.container.registerRequestProvider(request, contextId);
+      this.container.registerRequestProvider(
+        contextId.getParent ? contextId.payload : request,
+        contextId,
+      );
     }
     return contextId;
   }

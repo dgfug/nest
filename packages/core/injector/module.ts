@@ -1,16 +1,17 @@
 import {
-  Abstract,
   ClassProvider,
   Controller,
   DynamicModule,
   ExistingProvider,
   FactoryProvider,
+  GetOrResolveOptions,
   Injectable,
+  InjectionToken,
   NestModule,
   Provider,
+  Type,
   ValueProvider,
 } from '@nestjs/common/interfaces';
-import { Type } from '@nestjs/common/interfaces/type.interface';
 import { randomStringGenerator } from '@nestjs/common/utils/random-string-generator.util';
 import {
   isFunction,
@@ -21,22 +22,24 @@ import {
 } from '@nestjs/common/utils/shared.utils';
 import { iterate } from 'iterare';
 import { ApplicationConfig } from '../application-config';
-import { InvalidClassException } from '../errors/exceptions/invalid-class.exception';
-import { RuntimeException } from '../errors/exceptions/runtime.exception';
-import { UnknownExportException } from '../errors/exceptions/unknown-export.exception';
+import {
+  InvalidClassException,
+  RuntimeException,
+  UnknownExportException,
+} from '../errors/exceptions';
 import { createContextId } from '../helpers/context-id-factory';
 import { getClassScope } from '../helpers/get-class-scope';
+import { isDurable } from '../helpers/is-durable';
 import { CONTROLLER_ID_KEY } from './constants';
 import { NestContainer } from './container';
 import { InstanceWrapper } from './instance-wrapper';
 import { ModuleRef } from './module-ref';
 
-export type InstanceToken =
-  | string
-  | symbol
-  | Type<any>
-  | Abstract<any>
-  | Function;
+/**
+ * @note
+ * Left for backward compatibility
+ */
+export type InstanceToken = InjectionToken;
 
 export class Module {
   private readonly _id: string;
@@ -210,6 +213,7 @@ export class Module {
         instance: null,
         isResolved: false,
         scope: getClassScope(injectable),
+        durable: isDurable(injectable),
         host: this,
       });
       this._injectables.set(injectable, instanceWrapper);
@@ -234,6 +238,7 @@ export class Module {
         instance: null,
         isResolved: false,
         scope: getClassScope(provider),
+        durable: isDurable(provider),
         host: this,
       }),
     );
@@ -302,11 +307,14 @@ export class Module {
     provider: ClassProvider,
     collection: Map<InstanceToken, InstanceWrapper>,
   ) {
-    let { scope } = provider;
+    let { scope, durable } = provider;
 
     const { useClass } = provider;
     if (isUndefined(scope)) {
       scope = getClassScope(useClass);
+    }
+    if (isUndefined(durable)) {
+      durable = isDurable(useClass);
     }
     collection.set(
       provider.provide,
@@ -317,6 +325,7 @@ export class Module {
         instance: null,
         isResolved: false,
         scope,
+        durable,
         host: this,
       }),
     );
@@ -349,6 +358,7 @@ export class Module {
       useFactory: factory,
       inject,
       scope,
+      durable,
       provide: providerToken,
     } = provider;
 
@@ -362,6 +372,7 @@ export class Module {
         isResolved: false,
         inject: inject || [],
         scope,
+        durable,
         host: this,
       }),
     );
@@ -446,6 +457,7 @@ export class Module {
         instance: null,
         isResolved: false,
         scope: getClassScope(controller),
+        durable: isDurable(controller),
         host: this,
       }),
     );
@@ -509,19 +521,27 @@ export class Module {
 
       public get<TInput = any, TResult = TInput>(
         typeOrToken: Type<TInput> | string | symbol,
-        options: { strict: boolean } = { strict: true },
-      ): TResult {
+        options: GetOrResolveOptions = { strict: true },
+      ): TResult | Array<TResult> {
         return !(options && options.strict)
-          ? this.find<TInput, TResult>(typeOrToken)
-          : this.find<TInput, TResult>(typeOrToken, self);
+          ? this.find<TInput, TResult>(typeOrToken, options)
+          : this.find<TInput, TResult>(typeOrToken, {
+              moduleId: self.id,
+              each: options.each,
+            });
       }
 
       public resolve<TInput = any, TResult = TInput>(
         typeOrToken: Type<TInput> | string | symbol,
         contextId = createContextId(),
-        options: { strict: boolean } = { strict: true },
-      ): Promise<TResult> {
-        return this.resolvePerContext(typeOrToken, self, contextId, options);
+        options: GetOrResolveOptions = { strict: true },
+      ): Promise<TResult | Array<TResult>> {
+        return this.resolvePerContext<TInput, TResult>(
+          typeOrToken,
+          self,
+          contextId,
+          options,
+        );
       }
 
       public async create<T = any>(type: Type<T>): Promise<T> {

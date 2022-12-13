@@ -4,9 +4,12 @@ import {
   MODULE_PATH,
   VERSION_METADATA,
 } from '@nestjs/common/constants';
-import { HttpServer, Type } from '@nestjs/common/interfaces';
-import { Controller } from '@nestjs/common/interfaces/controllers/controller.interface';
-import { VersionValue } from '@nestjs/common/interfaces/version-options.interface';
+import {
+  HttpServer,
+  Type,
+  VersionValue,
+  Controller,
+} from '@nestjs/common/interfaces';
 import { Logger } from '@nestjs/common/services/logger.service';
 import { ApplicationConfig } from '../application-config';
 import {
@@ -174,7 +177,10 @@ export class RoutesResolver implements Resolver {
 
   public mapExternalException(err: any) {
     switch (true) {
-      case err instanceof SyntaxError:
+      // SyntaxError is thrown by Express body-parser when given invalid JSON (#422, #430)
+      // URIError is thrown by Express when given a path parameter with an invalid percentage
+      // encoding, e.g. '%FF' (#8915)
+      case err instanceof SyntaxError || err instanceof URIError:
         return new BadRequestException(err.message);
       default:
         return err;

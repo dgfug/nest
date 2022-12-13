@@ -1,6 +1,6 @@
 /*
  * Nest @common
- * Copyright(c) 2017 - 2021 Kamil Mysliwiec
+ * Copyright(c) 2017 - 2022 Kamil Mysliwiec
  * https://nestjs.com
  * MIT Licensed
  */
@@ -11,7 +11,6 @@ export * from './decorators';
 export * from './enums';
 export * from './exceptions';
 export * from './file-stream';
-export * from './http';
 export {
   Abstract,
   ArgumentMetadata,
@@ -31,6 +30,7 @@ export {
   INestApplication,
   INestApplicationContext,
   INestMicroservice,
+  InjectionToken,
   IntrospectionResult,
   MessageEvent,
   MiddlewareConsumer,
@@ -44,9 +44,11 @@ export {
   OnApplicationShutdown,
   OnModuleDestroy,
   OnModuleInit,
+  OptionalFactoryDependency,
   Paramtype,
   PipeTransform,
   Provider,
+  RawBodyRequest,
   RpcExceptionFilter,
   Scope,
   ScopeOptions,
@@ -59,6 +61,7 @@ export {
   WsExceptionFilter,
   WsMessageHandler,
 } from './interfaces';
+export * from './module-utils';
 export * from './pipes';
 export * from './serializer';
 export * from './services';

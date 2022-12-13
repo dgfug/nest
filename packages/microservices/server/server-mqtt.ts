@@ -1,5 +1,4 @@
 import { isUndefined } from '@nestjs/common/utils/shared.utils';
-import { Observable } from 'rxjs';
 import {
   CONNECT_EVENT,
   ERROR_EVENT,
@@ -30,8 +29,9 @@ let mqttPackage: any = {};
 export class ServerMqtt extends Server implements CustomTransportStrategy {
   public readonly transportId = Transport.MQTT;
 
+  protected mqttClient: MqttClient;
+
   private readonly url: string;
-  private mqttClient: MqttClient;
 
   constructor(private readonly options: MqttOptions['options']) {
     super();
@@ -123,7 +123,7 @@ export class ServerMqtt extends Server implements CustomTransportStrategy {
     }
     const response$ = this.transformToObservable(
       await handler(packet.data, mqttContext),
-    ) as Observable<any>;
+    );
     response$ && this.send(response$, publish);
   }
 
@@ -191,16 +191,23 @@ export class ServerMqtt extends Server implements CustomTransportStrategy {
 
     for (const [key, value] of this.messageHandlers) {
       if (
-        key.indexOf(MQTT_WILDCARD_SINGLE) === -1 &&
-        key.indexOf(MQTT_WILDCARD_ALL) === -1
+        !key.includes(MQTT_WILDCARD_SINGLE) &&
+        !key.includes(MQTT_WILDCARD_ALL)
       ) {
         continue;
       }
-      if (this.matchMqttPattern(key, route)) {
+      const keyWithoutSharedPrefix = this.removeHandlerKeySharedPrefix(key);
+      if (this.matchMqttPattern(keyWithoutSharedPrefix, route)) {
         return value;
       }
     }
     return null;
+  }
+
+  public removeHandlerKeySharedPrefix(handlerKey: string) {
+    return handlerKey && handlerKey.startsWith('$share')
+      ? handlerKey.split('/').slice(2).join('/')
+      : handlerKey;
   }
 
   public getRequestPattern(pattern: string): string {

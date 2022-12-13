@@ -1,12 +1,12 @@
 import { ForbiddenException, ParamData } from '@nestjs/common';
-import { CUSTOM_ROUTE_AGRS_METADATA } from '@nestjs/common/constants';
+import { CUSTOM_ROUTE_ARGS_METADATA } from '@nestjs/common/constants';
 import {
   ContextType,
   Controller,
   PipeTransform,
 } from '@nestjs/common/interfaces';
 import { isEmpty, isFunction } from '@nestjs/common/utils/shared.utils';
-import { lastValueFrom } from 'rxjs';
+import { lastValueFrom, isObservable } from 'rxjs';
 import { ExternalExceptionFilterContext } from '../exceptions/external-exception-filter-context';
 import { FORBIDDEN_MESSAGE } from '../guards/constants';
 import { GuardsConsumer } from '../guards/guards-consumer';
@@ -272,7 +272,7 @@ export class ExternalContextCreator {
       );
       const type = this.contextUtils.mapParamType(key);
 
-      if (key.includes(CUSTOM_ROUTE_AGRS_METADATA)) {
+      if (key.includes(CUSTOM_ROUTE_ARGS_METADATA)) {
         const { factory } = metadata[key];
         const customExtractValue = this.contextUtils.getCustomFactory(
           factory,
@@ -329,7 +329,7 @@ export class ExternalContextCreator {
   }
 
   public async transformToResult(resultOrDeferred: any) {
-    if (resultOrDeferred && isFunction(resultOrDeferred.subscribe)) {
+    if (isObservable(resultOrDeferred)) {
       return lastValueFrom(resultOrDeferred);
     }
     return resultOrDeferred;

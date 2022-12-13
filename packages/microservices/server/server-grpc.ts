@@ -14,10 +14,10 @@ import { GrpcMethodStreamingType } from '../decorators';
 import { Transport } from '../enums';
 import { InvalidGrpcPackageException } from '../errors/invalid-grpc-package.exception';
 import { InvalidProtoDefinitionException } from '../errors/invalid-proto-definition.exception';
+import { ChannelOptions } from '../external/grpc-options.interface';
 import { CustomTransportStrategy, MessageHandler } from '../interfaces';
 import { GrpcOptions } from '../interfaces/microservice-configuration.interface';
 import { Server } from './server';
-import { ChannelOptions } from '../external/grpc-options.interface';
 
 let grpcPackage: any = {};
 let grpcProtoLoaderPackage: any = {};
@@ -48,7 +48,14 @@ export class ServerGrpc extends Server implements CustomTransportStrategy {
     grpcPackage = this.loadPackage('@grpc/grpc-js', ServerGrpc.name, () =>
       require('@grpc/grpc-js'),
     );
-    grpcProtoLoaderPackage = this.loadPackage(protoLoader, ServerGrpc.name);
+    grpcProtoLoaderPackage = this.loadPackage(
+      protoLoader,
+      ServerGrpc.name,
+      () =>
+        protoLoader === GRPC_DEFAULT_PROTO_LOADER
+          ? require('@grpc/proto-loader')
+          : require(protoLoader),
+    );
   }
 
   public async listen(
@@ -77,7 +84,7 @@ export class ServerGrpc extends Server implements CustomTransportStrategy {
 
     for (const packageName of packageNames) {
       const grpcPkg = this.lookupPackage(grpcContext, packageName);
-      await this.createServices(grpcPkg);
+      await this.createServices(grpcPkg, packageName);
     }
   }
 
@@ -213,10 +220,10 @@ export class ServerGrpc extends Server implements CustomTransportStrategy {
   public createUnaryServiceMethod(methodHandler: Function): Function {
     return async (call: GrpcCall, callback: Function) => {
       const handler = methodHandler(call.request, call.metadata, call);
-      this.transformToObservable(await handler).subscribe(
-        data => callback(null, data),
-        (err: any) => callback(err),
-      );
+      this.transformToObservable(await handler).subscribe({
+        next: data => callback(null, data),
+        error: (err: any) => callback(err),
+      });
     };
   }
 
@@ -285,7 +292,7 @@ export class ServerGrpc extends Server implements CustomTransportStrategy {
           ),
         );
 
-        if (typeof response !== 'undefined') {
+        if (!isUndefined(response)) {
           callback(null, response);
         }
       }
@@ -381,7 +388,7 @@ export class ServerGrpc extends Server implements CustomTransportStrategy {
         grpcPackage.loadPackageDefinition(packageDefinition);
       return packageObject;
     } catch (err) {
-      const invalidProtoError = new InvalidProtoDefinitionException();
+      const invalidProtoError = new InvalidProtoDefinitionException(err.path);
       const message =
         err && err.message ? err.message : invalidProtoError.message;
 
@@ -445,9 +452,9 @@ export class ServerGrpc extends Server implements CustomTransportStrategy {
     return name + '.' + key;
   }
 
-  private async createServices(grpcPkg: any) {
+  private async createServices(grpcPkg: any, packageName: string) {
     if (!grpcPkg) {
-      const invalidPackageError = new InvalidGrpcPackageException();
+      const invalidPackageError = new InvalidGrpcPackageException(packageName);
       this.logger.error(invalidPackageError.message, invalidPackageError.stack);
       throw invalidPackageError;
     }

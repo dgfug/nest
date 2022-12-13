@@ -1,13 +1,15 @@
 import {
-  Abstract,
   DynamicModule,
   flatten,
   ForwardReference,
   Provider,
 } from '@nestjs/common';
 import {
+  CATCH_WATERMARK,
+  CONTROLLER_WATERMARK,
   EXCEPTION_FILTERS_METADATA,
   GUARDS_METADATA,
+  INJECTABLE_WATERMARK,
   INTERCEPTORS_METADATA,
   MODULE_METADATA,
   PIPES_METADATA,
@@ -19,6 +21,7 @@ import {
   ExceptionFilter,
   ExistingProvider,
   FactoryProvider,
+  InjectionToken,
   NestInterceptor,
   PipeTransform,
   Scope,
@@ -37,19 +40,20 @@ import { iterate } from 'iterare';
 import { ApplicationConfig } from './application-config';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR, APP_PIPE } from './constants';
 import { CircularDependencyException } from './errors/exceptions/circular-dependency.exception';
+import { InvalidClassModuleException } from './errors/exceptions/invalid-class-module.exception';
 import { InvalidModuleException } from './errors/exceptions/invalid-module.exception';
 import { UndefinedModuleException } from './errors/exceptions/undefined-module.exception';
 import { getClassScope } from './helpers/get-class-scope';
 import { NestContainer } from './injector/container';
 import { InstanceWrapper } from './injector/instance-wrapper';
-import { InternalCoreModuleFactory } from './injector/internal-core-module-factory';
+import { InternalCoreModuleFactory } from './injector/internal-core-module/internal-core-module-factory';
 import { Module } from './injector/module';
 import { MetadataScanner } from './metadata-scanner';
 
 interface ApplicationProviderWrapper {
   moduleKey: string;
   providerKey: string;
-  type: string | symbol | Type<any> | Abstract<any> | Function;
+  type: InjectionToken;
   scope?: Scope;
 }
 
@@ -96,13 +100,13 @@ export class DependenciesScanner {
       moduleDefinition as Type<any> | DynamicModule,
     )
       ? this.reflectMetadata(
-          moduleDefinition as Type<any>,
           MODULE_METADATA.IMPORTS,
+          moduleDefinition as Type<any>,
         )
       : [
           ...this.reflectMetadata(
-            (moduleDefinition as DynamicModule).module,
             MODULE_METADATA.IMPORTS,
+            (moduleDefinition as DynamicModule).module,
           ),
           ...((moduleDefinition as DynamicModule).imports || []),
         ];
@@ -133,13 +137,22 @@ export class DependenciesScanner {
   }
 
   public async insertModule(
-    module: any,
+    moduleDefinition: any,
     scope: Type<unknown>[],
   ): Promise<Module | undefined> {
-    if (module && module.forwardRef) {
-      return this.container.addModule(module.forwardRef(), scope);
+    const moduleToAdd = this.isForwardReference(moduleDefinition)
+      ? moduleDefinition.forwardRef()
+      : moduleDefinition;
+
+    if (
+      this.isInjectable(moduleToAdd) ||
+      this.isController(moduleToAdd) ||
+      this.isExceptionFilter(moduleToAdd)
+    ) {
+      throw new InvalidClassModuleException(moduleDefinition, scope);
     }
-    return this.container.addModule(module, scope);
+
+    return this.container.addModule(moduleToAdd, scope);
   }
 
   public async scanModulesForDependencies(
@@ -159,7 +172,7 @@ export class DependenciesScanner {
     context: string,
   ) {
     const modules = [
-      ...this.reflectMetadata(module, MODULE_METADATA.IMPORTS),
+      ...this.reflectMetadata(MODULE_METADATA.IMPORTS, module),
       ...this.container.getDynamicMetadataByToken(
         token,
         MODULE_METADATA.IMPORTS as 'imports',
@@ -172,7 +185,7 @@ export class DependenciesScanner {
 
   public reflectProviders(module: Type<any>, token: string) {
     const providers = [
-      ...this.reflectMetadata(module, MODULE_METADATA.PROVIDERS),
+      ...this.reflectMetadata(MODULE_METADATA.PROVIDERS, module),
       ...this.container.getDynamicMetadataByToken(
         token,
         MODULE_METADATA.PROVIDERS as 'providers',
@@ -186,7 +199,7 @@ export class DependenciesScanner {
 
   public reflectControllers(module: Type<any>, token: string) {
     const controllers = [
-      ...this.reflectMetadata(module, MODULE_METADATA.CONTROLLERS),
+      ...this.reflectMetadata(MODULE_METADATA.CONTROLLERS, module),
       ...this.container.getDynamicMetadataByToken(
         token,
         MODULE_METADATA.CONTROLLERS as 'controllers',
@@ -211,7 +224,7 @@ export class DependenciesScanner {
 
   public reflectExports(module: Type<unknown>, token: string) {
     const exports = [
-      ...this.reflectMetadata(module, MODULE_METADATA.EXPORTS),
+      ...this.reflectMetadata(MODULE_METADATA.EXPORTS, module),
       ...this.container.getDynamicMetadataByToken(
         token,
         MODULE_METADATA.EXPORTS as 'exports',
@@ -227,7 +240,7 @@ export class DependenciesScanner {
     token: string,
     metadataKey: string,
   ) {
-    const controllerInjectables = this.reflectMetadata(component, metadataKey);
+    const controllerInjectables = this.reflectMetadata(metadataKey, component);
     const methodsInjectables = this.metadataScanner.scanFromPrototype(
       null,
       component.prototype,
@@ -315,7 +328,7 @@ export class DependenciesScanner {
     if (isUndefined(related)) {
       throw new CircularDependencyException(context);
     }
-    if (related && related.forwardRef) {
+    if (this.isForwardReference(related)) {
       return this.container.addImport(related.forwardRef(), token);
     }
     await this.container.addImport(related, token);
@@ -398,7 +411,7 @@ export class DependenciesScanner {
     this.container.addController(controller, token);
   }
 
-  public reflectMetadata(metatype: Type<any>, metadataKey: string) {
+  public reflectMetadata(metadataKey: string, metatype: Type<any>) {
     return Reflect.getMetadata(metadataKey, metatype) || [];
   }
 
@@ -502,14 +515,38 @@ export class DependenciesScanner {
     return module && !!(module as DynamicModule).module;
   }
 
-  public isForwardReference(
+  /**
+   * @param metatype
+   * @returns `true` if `metatype` is annotated with the `@Injectable()` decorator.
+   */
+  private isInjectable(metatype: Type<any>): boolean {
+    return !!Reflect.getMetadata(INJECTABLE_WATERMARK, metatype);
+  }
+
+  /**
+   * @param metatype
+   * @returns `true` if `metatype` is annotated with the `@Controller()` decorator.
+   */
+  private isController(metatype: Type<any>): boolean {
+    return !!Reflect.getMetadata(CONTROLLER_WATERMARK, metatype);
+  }
+
+  /**
+   * @param metatype
+   * @returns `true` if `metatype` is annotated with the `@Catch()` decorator.
+   */
+  private isExceptionFilter(metatype: Type<any>): boolean {
+    return !!Reflect.getMetadata(CATCH_WATERMARK, metatype);
+  }
+
+  private isForwardReference(
     module: Type<any> | DynamicModule | ForwardReference,
   ): module is ForwardReference {
     return module && !!(module as ForwardReference).forwardRef;
   }
 
   private flatten<T = any>(arr: T[][]): T[] {
-    return arr.reduce((a: T[], b: T[]) => a.concat(b), []);
+    return arr.flat(1);
   }
 
   private isRequestOrTransient(scope: Scope): boolean {

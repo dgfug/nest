@@ -1,4 +1,4 @@
-import { ForwardReference, Type } from '@nestjs/common';
+import type { ForwardReference, Type, DynamicModule } from '@nestjs/common';
 import { isNil, isSymbol } from '@nestjs/common/utils/shared.utils';
 import {
   InjectorDependency,
@@ -7,14 +7,19 @@ import {
 import { Module } from '../injector/module';
 
 /**
- * Returns the name of an instance
+ * Returns the name of an instance or `undefined`
  * @param instance The instance which should get the name from
  */
 const getInstanceName = (instance: unknown): string => {
   if ((instance as ForwardReference)?.forwardRef) {
     return (instance as ForwardReference).forwardRef()?.name;
   }
-  return (instance as Type<any>)?.name;
+
+  if ((instance as DynamicModule)?.module) {
+    return (instance as DynamicModule).module?.name;
+  }
+
+  return (instance as Type)?.name;
 };
 
 /**
@@ -55,19 +60,31 @@ export const UNKNOWN_DEPENDENCIES_MESSAGE = (
     dependencies,
     key,
   } = unknownDependencyContext;
-  const moduleName = getModuleName(module) || 'Module';
+  const moduleName = getModuleName(module);
   const dependencyName = getDependencyName(name);
 
-  let message = `Nest can't resolve dependencies of the ${type.toString()}`;
-
-  const potentialSolutions = `\n
+  const potentialSolutions =
+    // If module's name is well defined
+    moduleName !== 'current'
+      ? `\n
 Potential solutions:
+- Is ${moduleName} a valid NestJS module?
 - If ${dependencyName} is a provider, is it part of the current ${moduleName}?
 - If ${dependencyName} is exported from a separate @Module, is that module imported within ${moduleName}?
   @Module({
     imports: [ /* the Module containing ${dependencyName} */ ]
   })
+`
+      : `\n
+Potential solutions:
+- If ${dependencyName} is a provider, is it part of the current Module?
+- If ${dependencyName} is exported from a separate @Module, is that module imported within Module?
+  @Module({
+    imports: [ /* the Module containing ${dependencyName} */ ]
+  })
 `;
+
+  let message = `Nest can't resolve dependencies of the ${type.toString()}`;
 
   if (isNil(index)) {
     message += `. Please make sure that the "${key.toString()}" property is available in the current context.${potentialSolutions}`;
@@ -78,9 +95,7 @@ Potential solutions:
 
   message += ` (`;
   message += dependenciesName.join(', ');
-  message += `). Please make sure that the argument ${dependencyName} at index [${index}] is available in the ${getModuleName(
-    module,
-  )} context.`;
+  message += `). Please make sure that the argument ${dependencyName} at index [${index}] is available in the ${moduleName} context.`;
   message += potentialSolutions;
 
   return message;
@@ -97,7 +112,7 @@ export const UNDEFINED_FORWARDREF_MESSAGE = (
 
 (Read more: https://docs.nestjs.com/fundamentals/circular-dependency)
 Scope [${stringifyScope(scope)}]
-  `;
+`;
 
 export const INVALID_MODULE_MESSAGE = (
   parentModule: any,
@@ -107,9 +122,23 @@ export const INVALID_MODULE_MESSAGE = (
   const parentModuleName = parentModule?.name || 'module';
 
   return `Nest cannot create the ${parentModuleName} instance.
-Received an unexpected value at index [${index}] of the ${parentModuleName} "imports" array. 
+Received an unexpected value at index [${index}] of the ${parentModuleName} "imports" array.
 
 Scope [${stringifyScope(scope)}]`;
+};
+
+export const USING_INVALID_CLASS_AS_A_MODULE_MESSAGE = (
+  metatypeUsedAsAModule: Type | ForwardReference,
+  scope: any[],
+) => {
+  const metatypeNameQuote =
+    `"${getInstanceName(metatypeUsedAsAModule)}"` || 'that class';
+
+  return `Classes annotated with @Injectable(), @Catch(), and @Controller() decorators must not appear in the "imports" array of a module.
+Please remove ${metatypeNameQuote} (including forwarded occurrences, if any) from all of the "imports" arrays.
+
+Scope [${stringifyScope(scope)}]
+`;
 };
 
 export const UNDEFINED_MODULE_MESSAGE = (
@@ -153,8 +182,14 @@ export const INVALID_CLASS_SCOPE_MESSAGE = (
     name || 'This class'
   } is marked as a scoped provider. Request and transient-scoped providers can't be used in combination with "get()" method. Please, use "resolve()" instead.`;
 
+export const UNKNOWN_REQUEST_MAPPING = (metatype: Type) => {
+  const className = metatype.name;
+  return className
+    ? `An invalid controller has been detected. "${className}" does not have the @Controller() decorator but it is being listed in the "controllers" array of some module.`
+    : `An invalid controller has been detected. Perhaps, one of your controllers is missing the @Controller() decorator.`;
+};
+
 export const INVALID_MIDDLEWARE_CONFIGURATION = `An invalid middleware configuration has been passed inside the module 'configure()' method.`;
-export const UNKNOWN_REQUEST_MAPPING = `An invalid controller has been detected. Perhaps, one of your controllers is missing @Controller() decorator.`;
 export const UNHANDLED_RUNTIME_EXCEPTION = `Unhandled Runtime Exception.`;
 export const INVALID_EXCEPTION_FILTER = `Invalid exception filters (@UseFilters()).`;
 export const MICROSERVICES_PACKAGE_NOT_FOUND_EXCEPTION = `Unable to load @nestjs/microservices package. (Please make sure that it's already installed.)`;

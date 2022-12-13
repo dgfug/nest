@@ -22,6 +22,8 @@ describe('ClientKafka', () => {
   const timestamp = new Date().toISOString();
   const attributes = 1;
   const messageValue = 'test-message';
+  const heartbeat = async () => {};
+  const pause = () => () => {};
 
   // message
   const message: KafkaMessage = {
@@ -57,6 +59,8 @@ describe('ClientKafka', () => {
       },
       message,
     ),
+    heartbeat,
+    pause,
   };
 
   const payloadDisposed: EachMessagePayload = {
@@ -72,9 +76,11 @@ describe('ClientKafka', () => {
       message,
       {
         size: 0,
-        value: { test: true },
+        value: Buffer.from(JSON.stringify({ test: true })),
       },
     ),
+    heartbeat,
+    pause,
   };
 
   const payloadError: EachMessagePayload = {
@@ -93,6 +99,8 @@ describe('ClientKafka', () => {
         value: null,
       },
     ),
+    heartbeat,
+    pause,
   };
 
   const payloadWithoutCorrelation: EachMessagePayload = {
@@ -104,6 +112,8 @@ describe('ClientKafka', () => {
       },
       message,
     ),
+    heartbeat,
+    pause,
   };
 
   // deserialized payload
@@ -118,6 +128,8 @@ describe('ClientKafka', () => {
       },
       deserializedMessage,
     ),
+    heartbeat,
+    pause,
   };
 
   const deserializedPayloadDisposed: EachMessagePayload = {
@@ -136,6 +148,8 @@ describe('ClientKafka', () => {
         value: { test: true },
       },
     ),
+    heartbeat,
+    pause,
   };
 
   const deserializedPayloadError: EachMessagePayload = {
@@ -154,6 +168,8 @@ describe('ClientKafka', () => {
         value: null,
       },
     ),
+    heartbeat,
+    pause,
   };
 
   let client: ClientKafka;
@@ -277,47 +293,95 @@ describe('ClientKafka', () => {
     let bindTopicsStub: sinon.SinonStub;
     // let handleErrorsSpy: sinon.SinonSpy;
 
-    beforeEach(() => {
-      consumerAssignmentsStub = sinon.stub(
-        client as any,
-        'consumerAssignments',
-      );
-      bindTopicsStub = sinon
-        .stub(client, 'bindTopics')
-        .callsFake(async () => {});
+    describe('consumer and producer', () => {
+      beforeEach(() => {
+        consumerAssignmentsStub = sinon.stub(
+          client as any,
+          'consumerAssignments',
+        );
+        bindTopicsStub = sinon
+          .stub(client, 'bindTopics')
+          .callsFake(async () => {});
+      });
+
+      it('should expect the connection to be created', async () => {
+        const connection = await client.connect();
+
+        expect(createClientStub.calledOnce).to.be.true;
+        expect(producerStub.calledOnce).to.be.true;
+
+        expect(consumerStub.calledOnce).to.be.true;
+
+        expect(on.calledOnce).to.be.true;
+        expect(client['consumerAssignments']).to.be.empty;
+
+        expect(connect.calledTwice).to.be.true;
+
+        expect(bindTopicsStub.calledOnce).to.be.true;
+        expect(connection).to.deep.equal(producerStub());
+      });
+
+      it('should expect the connection to be reused', async () => {
+        (client as any).client = kafkaClient;
+        await client.connect();
+
+        expect(createClientStub.calledOnce).to.be.false;
+        expect(producerStub.calledOnce).to.be.false;
+        expect(consumerStub.calledOnce).to.be.false;
+
+        expect(on.calledOnce).to.be.false;
+        expect(client['consumerAssignments']).to.be.empty;
+
+        expect(connect.calledTwice).to.be.false;
+
+        expect(bindTopicsStub.calledOnce).to.be.false;
+      });
     });
 
-    it('should expect the connection to be created', async () => {
-      const connection = await client.connect();
+    describe('producer only mode', () => {
+      beforeEach(() => {
+        consumerAssignmentsStub = sinon.stub(
+          client as any,
+          'consumerAssignments',
+        );
+        bindTopicsStub = sinon
+          .stub(client, 'bindTopics')
+          .callsFake(async () => {});
+        client['producerOnlyMode'] = true;
+      });
 
-      expect(createClientStub.calledOnce).to.be.true;
-      expect(producerStub.calledOnce).to.be.true;
+      it('should expect the connection to be created', async () => {
+        const connection = await client.connect();
 
-      expect(consumerStub.calledOnce).to.be.true;
+        expect(createClientStub.calledOnce).to.be.true;
+        expect(producerStub.calledOnce).to.be.true;
 
-      expect(on.calledOnce).to.be.true;
-      expect(client['consumerAssignments']).to.be.empty;
+        expect(consumerStub.calledOnce).to.be.false;
 
-      expect(connect.calledTwice).to.be.true;
+        expect(on.calledOnce).to.be.false;
+        expect(client['consumerAssignments']).to.be.empty;
 
-      expect(bindTopicsStub.calledOnce).to.be.true;
-      expect(connection).to.deep.equal(producerStub());
-    });
+        expect(connect.calledOnce).to.be.true;
 
-    it('should expect the connection to be reused', async () => {
-      (client as any).client = kafkaClient;
-      await client.connect();
+        expect(bindTopicsStub.calledOnce).to.be.false;
+        expect(connection).to.deep.equal(producerStub());
+      });
 
-      expect(createClientStub.calledOnce).to.be.false;
-      expect(producerStub.calledOnce).to.be.false;
-      expect(consumerStub.calledOnce).to.be.false;
+      it('should expect the connection to be reused', async () => {
+        (client as any).client = kafkaClient;
+        await client.connect();
 
-      expect(on.calledOnce).to.be.false;
-      expect(client['consumerAssignments']).to.be.empty;
+        expect(createClientStub.calledOnce).to.be.false;
+        expect(producerStub.calledOnce).to.be.false;
+        expect(consumerStub.calledOnce).to.be.false;
 
-      expect(connect.calledTwice).to.be.false;
+        expect(on.calledOnce).to.be.false;
+        expect(client['consumerAssignments']).to.be.empty;
 
-      expect(bindTopicsStub.calledOnce).to.be.false;
+        expect(connect.calledTwice).to.be.false;
+
+        expect(bindTopicsStub.calledOnce).to.be.false;
+      });
     });
   });
 
@@ -424,7 +488,7 @@ describe('ClientKafka', () => {
         expect(
           callback.calledWith({
             isDisposed: true,
-            response: payloadDisposed.message.value,
+            response: deserializedPayloadDisposed.message.value,
             err: undefined,
           }),
         ).to.be.true;
@@ -659,6 +723,12 @@ describe('ClientKafka', () => {
       );
     });
 
+    it('should remove callback from routing map when unsubscribe', async () => {
+      client['publish'](readPacket, callback)();
+      expect(client['routingMap'].has(correlationId)).to.be.false;
+      expect(client['routingMap'].size).to.eq(0);
+    });
+
     describe('on error', () => {
       let clientProducerStub: sinon.SinonStub;
       let sendStub: sinon.SinonStub;
@@ -678,10 +748,11 @@ describe('ClientKafka', () => {
       });
 
       it('should call callback', async () => {
-        await client['publish'](readPacket, callback);
-
-        expect(callback.called).to.be.true;
-        expect(callback.getCall(0).args[0].err).to.be.instanceof(Error);
+        return new Promise(async resolve => {
+          return client['publish'](readPacket, ({ err }) => resolve(err));
+        }).then(err => {
+          expect(err).to.be.instanceof(Error);
+        });
       });
     });
 

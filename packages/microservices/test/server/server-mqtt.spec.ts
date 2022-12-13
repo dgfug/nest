@@ -112,7 +112,7 @@ describe('ServerMqtt', () => {
       const handleEventSpy = sinon.spy(server, 'handleEvent');
       await server.handleMessage(
         channel,
-        new Buffer(JSON.stringify({ pattern: '', data })),
+        Buffer.from(JSON.stringify({ pattern: '', data })),
         null,
       );
       expect(handleEventSpy.called).to.be.true;
@@ -120,7 +120,7 @@ describe('ServerMqtt', () => {
     it(`should publish NO_MESSAGE_HANDLER if pattern not exists in messageHandlers object`, async () => {
       await server.handleMessage(
         channel,
-        new Buffer(JSON.stringify({ id, pattern: '', data })),
+        Buffer.from(JSON.stringify({ id, pattern: '', data })),
         null,
       );
       expect(
@@ -139,7 +139,7 @@ describe('ServerMqtt', () => {
 
       await server.handleMessage(
         channel,
-        new Buffer(JSON.stringify({ pattern: '', data, id: '2' })),
+        Buffer.from(JSON.stringify({ pattern: '', data, id: '2' })),
         null,
       );
       expect(handler.calledWith(data)).to.be.true;
@@ -175,7 +175,7 @@ describe('ServerMqtt', () => {
   });
   describe('getRequestPattern', () => {
     const test = 'test';
-    it(`should leave patern as it is`, () => {
+    it(`should leave pattern as it is`, () => {
       expect(server.getRequestPattern(test)).to.equal(test);
     });
   });

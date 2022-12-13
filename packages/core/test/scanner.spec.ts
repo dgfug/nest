@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Catch, Injectable, Logger } from '@nestjs/common';
 import { expect } from 'chai';
 import * as sinon from 'sinon';
 import { GUARDS_METADATA } from '../../common/constants';
@@ -9,6 +9,7 @@ import { Scope } from '../../common/interfaces';
 import { ApplicationConfig } from '../application-config';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR, APP_PIPE } from '../constants';
 import { InvalidModuleException } from '../errors/exceptions/invalid-module.exception';
+import { InvalidClassModuleException } from '../errors/exceptions/invalid-class-module.exception';
 import { UndefinedModuleException } from '../errors/exceptions/undefined-module.exception';
 import { NestContainer } from '../injector/container';
 import { InstanceWrapper } from '../injector/instance-wrapper';
@@ -20,6 +21,9 @@ describe('DependenciesScanner', () => {
 
   @Injectable()
   class TestComponent {}
+
+  @Catch()
+  class TestExceptionFilterWithoutInjectable {}
 
   @Controller('')
   class TestController {}
@@ -163,11 +167,33 @@ describe('DependenciesScanner', () => {
 
   describe('insertModule', () => {
     it('should call forwardRef() when forwardRef property exists', () => {
-      const module = { forwardRef: sinon.spy() };
-
       sinon.stub(container, 'addModule').returns({} as any);
-      scanner.insertModule(module as any, [] as any);
+
+      const module = { forwardRef: sinon.spy() };
+      scanner.insertModule(module, []);
+
       expect(module.forwardRef.called).to.be.true;
+    });
+    it('should throw "InvalidClassModuleException" exception when suppling a class annotated with `@Injectable()` decorator', () => {
+      sinon.stub(container, 'addModule').returns({} as any);
+
+      expect(scanner.insertModule(TestComponent, [])).to.be.rejectedWith(
+        InvalidClassModuleException,
+      );
+    });
+    it('should throw "InvalidClassModuleException" exception when suppling a class annotated with `@Controller()` decorator', () => {
+      sinon.stub(container, 'addModule').returns({} as any);
+
+      expect(scanner.insertModule(TestController, [])).to.be.rejectedWith(
+        InvalidClassModuleException,
+      );
+    });
+    it('should throw "InvalidClassModuleException" exception when suppling a class annotated with (only) `@Catch()` decorator', () => {
+      sinon.stub(container, 'addModule').returns({} as any);
+
+      expect(
+        scanner.insertModule(TestExceptionFilterWithoutInjectable, []),
+      ).to.be.rejectedWith(InvalidClassModuleException);
     });
   });
 

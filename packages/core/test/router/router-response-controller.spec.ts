@@ -1,7 +1,7 @@
 import { isNil, isObject } from '@nestjs/common/utils/shared.utils';
 import { expect } from 'chai';
 import { IncomingMessage, ServerResponse } from 'http';
-import { Observable, of } from 'rxjs';
+import { Observable, of, Subject } from 'rxjs';
 import * as sinon from 'sinon';
 import { PassThrough, Writable } from 'stream';
 import { HttpStatus, RequestMethod } from '../../../common';
@@ -71,13 +71,13 @@ describe('RouterResponseController', () => {
   describe('transformToResult', () => {
     describe('when resultOrDeferred', () => {
       describe('is Promise', () => {
-        it('should return Promise', async () => {
+        it('should return Promise that resolves to the value resolved by the input Promise', async () => {
           const value = 100;
           expect(
             await routerResponseController.transformToResult(
               Promise.resolve(value),
             ),
-          ).to.be.eq(100);
+          ).to.be.eq(value);
         });
       });
 
@@ -88,16 +88,25 @@ describe('RouterResponseController', () => {
             await routerResponseController.transformToResult(
               of(1, 2, 3, lastValue),
             ),
-          ).to.be.eq(100);
+          ).to.be.eq(lastValue);
         });
       });
 
-      describe('is value', () => {
-        it('should return Promise', async () => {
+      describe('is an object that has the method `subscribe`', () => {
+        it('should return a Promise that resolves to the input value', async () => {
+          const value = { subscribe() {} };
+          expect(
+            await routerResponseController.transformToResult(value),
+          ).to.equal(value);
+        });
+      });
+
+      describe('is an ordinary value', () => {
+        it('should return a Promise that resolves to the input value', async () => {
           const value = 100;
           expect(
             await routerResponseController.transformToResult(value),
-          ).to.be.eq(100);
+          ).to.be.eq(value);
         });
       });
     });
@@ -299,7 +308,7 @@ describe('RouterResponseController', () => {
       request.destroy();
       await written(response);
       expect(response.content).to.eql(
-        `:
+        `
 id: 1
 data: test
 
@@ -310,7 +319,7 @@ data: test
     it('should close on request close', done => {
       const result = of('test');
       const response = new Writable();
-      response.end = () => done();
+      response.end = () => done() as any;
       response._write = () => {};
 
       const request = new Writable();
@@ -327,7 +336,7 @@ data: test
     it('should close the request when observable completes', done => {
       const result = of('test');
       const response = new Writable();
-      response.end = done;
+      response.end = done as any;
       response._write = () => {};
 
       const request = new Writable();
@@ -349,14 +358,86 @@ data: test
       const request = new Writable();
       request._write = () => {};
 
-      routerResponseController.sse(
-        result as unknown as Observable<string>,
-        response as unknown as ServerResponse,
-        request as unknown as IncomingMessage,
-      );
+      try {
+        routerResponseController.sse(
+          result as unknown as Observable<string>,
+          response as unknown as ServerResponse,
+          request as unknown as IncomingMessage,
+        );
+      } catch {
+        // Whether an error is thrown or not
+        // is not relevant, so long as
+        // result is not called
+      }
 
       sinon.assert.notCalled(result);
       done();
+    });
+
+    describe('when there is an error', () => {
+      it('should close the request', done => {
+        const result = new Subject();
+        const response = new Writable();
+        response.end = done as any;
+        response._write = () => {};
+
+        const request = new Writable();
+        request._write = () => {};
+
+        routerResponseController.sse(
+          result,
+          response as unknown as ServerResponse,
+          request as unknown as IncomingMessage,
+        );
+
+        result.error(new Error('Some error'));
+      });
+
+      it('should write the error message to the stream', async () => {
+        class Sink extends Writable {
+          private readonly chunks: string[] = [];
+
+          _write(
+            chunk: any,
+            encoding: string,
+            callback: (error?: Error | null) => void,
+          ): void {
+            this.chunks.push(chunk);
+            callback();
+          }
+
+          get content() {
+            return this.chunks.join('');
+          }
+        }
+
+        const written = (stream: Writable) =>
+          new Promise((resolve, reject) =>
+            stream.on('error', reject).on('finish', resolve),
+          );
+
+        const result = new Subject();
+        const response = new Sink();
+        const request = new PassThrough();
+        routerResponseController.sse(
+          result,
+          response as unknown as ServerResponse,
+          request as unknown as IncomingMessage,
+        );
+
+        result.error(new Error('Some error'));
+        request.destroy();
+
+        await written(response);
+        expect(response.content).to.eql(
+          `
+event: error
+id: 1
+data: Some error
+
+`,
+        );
+      });
     });
   });
 });

@@ -48,11 +48,28 @@ describe('GRPC transport', () => {
     );
   });
 
-  it(`GRPC Sending and Receiving HTTP POST`, () => {
-    return request(server)
+  it(`GRPC Sending and Receiving HTTP POST`, async () => {
+    await request(server)
       .post('/sum')
       .send([1, 2, 3, 4, 5])
       .expect(200, { result: 15 });
+
+    await request(server)
+      .post('/upperMethod/sum')
+      .send([1, 2, 3, 4, 5])
+      .expect(200, { result: 15 });
+  });
+
+  it(`GRPC Receiving serialized Error`, async () => {
+    await request(server)
+      .post('/error?client=standard')
+      .expect(200)
+      .expect('false');
+
+    await request(server)
+      .post('/error?client=custom')
+      .expect(200)
+      .expect('true');
   });
 
   it(`GRPC Sending and Receiving HTTP POST (multiple proto)`, async () => {
@@ -78,7 +95,7 @@ describe('GRPC transport', () => {
     callHandler.on('error', (err: any) => {
       // We want to fail only on real errors while Cancellation error
       // is expected
-      if (String(err).toLowerCase().indexOf('cancelled') === -1) {
+      if (!String(err).toLowerCase().includes('cancelled')) {
         fail('gRPC Stream error happened, error: ' + err);
       }
     });
@@ -100,7 +117,7 @@ describe('GRPC transport', () => {
     callHandler.on('error', (err: any) => {
       // We want to fail only on real errors while Cancellation error
       // is expected
-      if (String(err).toLowerCase().indexOf('cancelled') === -1) {
+      if (!String(err).toLowerCase().includes('cancelled')) {
         fail('gRPC Stream error happened, error: ' + err);
       }
     });

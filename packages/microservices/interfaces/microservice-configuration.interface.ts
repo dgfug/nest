@@ -1,3 +1,4 @@
+import { Type } from '@nestjs/common';
 import { Transport } from '../enums/transport.enum';
 import { ChannelOptions } from '../external/grpc-options.interface';
 import {
@@ -9,8 +10,9 @@ import {
   ProducerRecord,
 } from '../external/kafka.interface';
 import { MqttClientOptions, QoS } from '../external/mqtt-options.interface';
-import { ClientOpts } from '../external/redis.interface';
+import { IORedisOptions } from '../external/redis.interface';
 import { RmqUrl } from '../external/rmq-url.interface';
+import { TcpSocket } from '../helpers';
 import { CustomTransportStrategy } from './custom-transport-strategy.interface';
 import { Deserializer } from './deserializer.interface';
 import { Serializer } from './serializer.interface';
@@ -33,9 +35,6 @@ export interface CustomStrategy {
 export interface GrpcOptions {
   transport?: Transport.GRPC;
   options: {
-    interceptors?: Array<
-      (options: any, nextCall: (options: any) => any) => any
-    >;
     url?: string;
     maxSendMessageLength?: number;
     maxReceiveMessageLength?: number;
@@ -80,18 +79,20 @@ export interface TcpOptions {
     retryDelay?: number;
     serializer?: Serializer;
     deserializer?: Deserializer;
+    socketClass?: Type<TcpSocket>;
   };
 }
 
 export interface RedisOptions {
   transport?: Transport.REDIS;
   options?: {
-    url?: string;
+    host?: string;
+    port?: number;
     retryAttempts?: number;
     retryDelay?: number;
     serializer?: Serializer;
     deserializer?: Deserializer;
-  } & ClientOpts;
+  } & IORedisOptions;
 }
 
 export interface MqttOptions {
@@ -181,6 +182,14 @@ export interface RmqOptions {
     replyQueue?: string;
     persistent?: boolean;
     headers?: Record<string, string>;
+    noAssert?: boolean;
+    /**
+     * Maximum number of connection attempts.
+     * Applies only to the consumer configuration.
+     * -1 === infinite
+     * @default -1
+     */
+    maxConnectionAttempts?: number;
   };
 }
 
@@ -191,6 +200,9 @@ export interface KafkaParserConfig {
 export interface KafkaOptions {
   transport?: Transport.KAFKA;
   options?: {
+    /**
+     * Defaults to `"-server"` on server side and `"-client"` on client side.
+     */
     postfixId?: string;
     client?: KafkaConfig;
     consumer?: ConsumerConfig;
@@ -201,5 +213,6 @@ export interface KafkaOptions {
     serializer?: Serializer;
     deserializer?: Deserializer;
     parser?: KafkaParserConfig;
+    producerOnlyMode?: boolean;
   };
 }

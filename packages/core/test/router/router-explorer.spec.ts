@@ -1,5 +1,3 @@
-import { VERSION_NEUTRAL } from '@nestjs/common';
-import { VersionValue } from '@nestjs/common/interfaces';
 import { expect } from 'chai';
 import * as sinon from 'sinon';
 import { Controller } from '../../../common/decorators/core/controller.decorator';
@@ -10,7 +8,6 @@ import {
 } from '../../../common/decorators/http/request-mapping.decorator';
 import { RequestMethod } from '../../../common/enums/request-method.enum';
 import { VersioningType } from '../../../common/enums/version-type.enum';
-import { VersioningOptions } from '../../../common/interfaces/version-options.interface';
 import { Injector } from '../../../core/injector/injector';
 import { ApplicationConfig } from '../../application-config';
 import { ExecutionContextHost } from '../../helpers/execution-context-host';
@@ -21,6 +18,8 @@ import { RoutePathMetadata } from '../../router/interfaces/route-path-metadata.i
 import { RoutePathFactory } from '../../router/route-path-factory';
 import { RouterExceptionFilters } from '../../router/router-exception-filters';
 import { RouterExplorer } from '../../router/router-explorer';
+import { NoopHttpAdapter } from '../utils/noop-adapter.spec';
+import { UnknownRequestMappingException } from '../../errors/exceptions/unknown-request-mapping.exception';
 
 describe('RouterExplorer', () => {
   @Controller('global')
@@ -52,6 +51,8 @@ describe('RouterExplorer', () => {
     @Get(['foo', 'bar'])
     public getTestUsingArray() {}
   }
+
+  class ClassWithMissingControllerDecorator {}
 
   let routerBuilder: RouterExplorer;
   let injector: Injector;
@@ -317,6 +318,15 @@ describe('RouterExplorer', () => {
         '/global-alias',
       ]);
     });
+
+    it("should throw UnknownRequestMappingException when missing the `@Controller()` decorator in the class, displaying class's name", () => {
+      expect(() =>
+        routerBuilder.extractRouterPath(ClassWithMissingControllerDecorator),
+      ).to.throw(
+        UnknownRequestMappingException,
+        /ClassWithMissingControllerDecorator/,
+      );
+    });
   });
 
   describe('createRequestScopedHandler', () => {
@@ -365,449 +375,34 @@ describe('RouterExplorer', () => {
   });
 
   describe('applyVersionFilter', () => {
-    describe('when the version is VERSION_NEUTRAL', () => {
-      it('should return the handler', () => {
-        const version = VERSION_NEUTRAL as VersionValue;
-        const versioningOptions: VersioningOptions = {
-          type: VersioningType.URI,
-        };
-        const handler = sinon.stub();
+    it('should call and return the `applyVersionFilter` from the underlying http server', () => {
+      const router = sinon.spy(new NoopHttpAdapter({}));
+      const routePathMetadata: RoutePathMetadata = {
+        methodVersion:
+          sinon.fake() as unknown as RoutePathMetadata['methodVersion'],
+        versioningOptions:
+          sinon.fake() as unknown as RoutePathMetadata['versioningOptions'],
+      };
+      const handler = sinon.stub();
 
-        const routePathMetadata: RoutePathMetadata = {
-          methodVersion: version,
-          versioningOptions,
-        };
-        const versionFilter = (routerBuilder as any).applyVersionFilter(
-          null,
-          routePathMetadata,
+      // We're using type assertion here because `applyVersionFilter` is private
+      const versionFilter = (routerBuilder as any).applyVersionFilter(
+        router,
+        routePathMetadata,
+        handler,
+      );
+
+      expect(
+        router.applyVersionFilter.calledOnceWithExactly(
           handler,
-        );
-
-        const req = {};
-        const res = {};
-        const next = sinon.stub();
-
-        versionFilter(req, res, next);
-
-        expect(handler.calledWith(req, res, next)).to.be.true;
-      });
-    });
-
-    describe('when the versioning type is URI', () => {
-      it('should return the handler', () => {
-        const version = '1';
-        const versioningOptions: VersioningOptions = {
-          type: VersioningType.URI,
-        };
-        const handler = sinon.stub();
-
-        const routePathMetadata: RoutePathMetadata = {
-          methodVersion: version,
-          versioningOptions,
-        };
-        const versionFilter = (routerBuilder as any).applyVersionFilter(
-          null,
-          routePathMetadata,
-          handler,
-        );
-
-        const req = {};
-        const res = {};
-        const next = sinon.stub();
-
-        versionFilter(req, res, next);
-        expect(handler.calledWith(req, res, next)).to.be.true;
-      });
-    });
-
-    describe('when the versioning type is MEDIA_TYPE', () => {
-      it('should return next if there is no Media Type header', () => {
-        const version = '1';
-        const versioningOptions: VersioningOptions = {
-          type: VersioningType.MEDIA_TYPE,
-          key: 'v=',
-        };
-        const handler = sinon.stub();
-
-        const routePathMetadata: RoutePathMetadata = {
-          methodVersion: version,
-          versioningOptions,
-        };
-        const versionFilter = (routerBuilder as any).applyVersionFilter(
-          null,
-          routePathMetadata,
-          handler,
-        );
-
-        const req = { headers: {} };
-        const res = {};
-        const next = sinon.stub();
-
-        versionFilter(req, res, next);
-
-        expect(next.called).to.be.true;
-      });
-
-      it('should return next if there is no version in the Media Type header', () => {
-        const version = '1';
-        const versioningOptions: VersioningOptions = {
-          type: VersioningType.MEDIA_TYPE,
-          key: 'v=',
-        };
-        const handler = sinon.stub();
-
-        const routePathMetadata: RoutePathMetadata = {
-          methodVersion: version,
-          versioningOptions,
-        };
-        const versionFilter = (routerBuilder as any).applyVersionFilter(
-          null,
-          routePathMetadata,
-          handler,
-        );
-
-        const req = { headers: { accept: 'application/json;' } };
-        const res = {};
-        const next = sinon.stub();
-
-        versionFilter(req, res, next);
-
-        expect(next.called).to.be.true;
-      });
-
-      describe('when the handler version is an array', () => {
-        it('should return next if the version in the Media Type header does not match the handler version', () => {
-          const version = ['1', '2'];
-          const versioningOptions: VersioningOptions = {
-            type: VersioningType.MEDIA_TYPE,
-            key: 'v=',
-          };
-          const handler = sinon.stub();
-
-          const routePathMetadata: RoutePathMetadata = {
-            methodVersion: version,
-            versioningOptions,
-          };
-          const versionFilter = (routerBuilder as any).applyVersionFilter(
-            null,
-            routePathMetadata,
-            handler,
-          );
-
-          const req = { headers: { accept: 'application/json;v=3' } };
-          const res = {};
-          const next = sinon.stub();
-
-          versionFilter(req, res, next);
-
-          expect(next.called).to.be.true;
-        });
-
-        it('should return the handler if the version in the Media Type header matches the handler version', () => {
-          const version = ['1', '2'];
-          const versioningOptions: VersioningOptions = {
-            type: VersioningType.MEDIA_TYPE,
-            key: 'v=',
-          };
-          const handler = sinon.stub();
-
-          const routePathMetadata: RoutePathMetadata = {
-            methodVersion: version,
-            versioningOptions,
-          };
-          const versionFilter = (routerBuilder as any).applyVersionFilter(
-            null,
-            routePathMetadata,
-            handler,
-          );
-
-          const req = { headers: { accept: 'application/json;v=1' } };
-          const res = {};
-          const next = sinon.stub();
-
-          versionFilter(req, res, next);
-
-          expect(handler.calledWith(req, res, next)).to.be.true;
-        });
-      });
-
-      describe('when the handler version is a string', () => {
-        it('should return next if the version in the Media Type header does not match the handler version', () => {
-          const version = '1';
-          const versioningOptions: VersioningOptions = {
-            type: VersioningType.MEDIA_TYPE,
-            key: 'v=',
-          };
-          const handler = sinon.stub();
-
-          const routePathMetadata: RoutePathMetadata = {
-            methodVersion: version,
-            versioningOptions,
-          };
-          const versionFilter = (routerBuilder as any).applyVersionFilter(
-            null,
-            routePathMetadata,
-            handler,
-          );
-
-          const req = { headers: { accept: 'application/json;v=3' } };
-          const res = {};
-          const next = sinon.stub();
-
-          versionFilter(req, res, next);
-
-          expect(next.called).to.be.true;
-        });
-
-        it('should return the handler if the version in the Media Type header matches the handler version', () => {
-          const version = '1';
-          const versioningOptions: VersioningOptions = {
-            type: VersioningType.MEDIA_TYPE,
-            key: 'v=',
-          };
-          const handler = sinon.stub();
-
-          const routePathMetadata: RoutePathMetadata = {
-            methodVersion: version,
-            versioningOptions,
-          };
-          const versionFilter = (routerBuilder as any).applyVersionFilter(
-            null,
-            routePathMetadata,
-            handler,
-          );
-
-          const req = { headers: { accept: 'application/json;v=1' } };
-          const res = {};
-          const next = sinon.stub();
-
-          versionFilter(req, res, next);
-
-          expect(handler.calledWith(req, res, next)).to.be.true;
-        });
-      });
-    });
-
-    describe('when the versioning type is HEADER', () => {
-      it('should return next if there is no Custom Header', () => {
-        const version = '1';
-        const versioningOptions: VersioningOptions = {
-          type: VersioningType.HEADER,
-          header: 'X-API-Version',
-        };
-        const handler = sinon.stub();
-
-        const routePathMetadata: RoutePathMetadata = {
-          methodVersion: version,
-          versioningOptions,
-        };
-        const versionFilter = (routerBuilder as any).applyVersionFilter(
-          null,
-          routePathMetadata,
-          handler,
-        );
-
-        const req = { headers: {} };
-        const res = {};
-        const next = sinon.stub();
-
-        versionFilter(req, res, next);
-
-        expect(next.called).to.be.true;
-      });
-
-      it('should return next if there is no version in the Custom Header', () => {
-        const version = '1';
-        const versioningOptions: VersioningOptions = {
-          type: VersioningType.HEADER,
-          header: 'X-API-Version',
-        };
-        const handler = sinon.stub();
-
-        const routePathMetadata: RoutePathMetadata = {
-          methodVersion: version,
-          versioningOptions,
-        };
-        const versionFilter = (routerBuilder as any).applyVersionFilter(
-          null,
-          routePathMetadata,
-          handler,
-        );
-
-        const req = { headers: { 'X-API-Version': '' } };
-        const res = {};
-        const next = sinon.stub();
-
-        versionFilter(req, res, next);
-
-        expect(next.called).to.be.true;
-      });
-
-      describe('when the handler version is an array', () => {
-        it('should return next if the version in the Custom Header does not match the handler version', () => {
-          const version = ['1', '2'];
-          const versioningOptions: VersioningOptions = {
-            type: VersioningType.HEADER,
-            header: 'X-API-Version',
-          };
-          const handler = sinon.stub();
-
-          const routePathMetadata: RoutePathMetadata = {
-            methodVersion: version,
-            versioningOptions,
-          };
-          const versionFilter = (routerBuilder as any).applyVersionFilter(
-            null,
-            routePathMetadata,
-            handler,
-          );
-
-          const req = { headers: { 'X-API-Version': '3' } };
-          const res = {};
-          const next = sinon.stub();
-
-          versionFilter(req, res, next);
-
-          expect(next.called).to.be.true;
-        });
-
-        it('should return the handler if the version in the Custom Header matches the handler version', () => {
-          const version = ['1', '2'];
-          const versioningOptions: VersioningOptions = {
-            type: VersioningType.HEADER,
-            header: 'X-API-Version',
-          };
-          const handler = sinon.stub();
-
-          const routePathMetadata: RoutePathMetadata = {
-            methodVersion: version,
-            versioningOptions,
-          };
-          const versionFilter = (routerBuilder as any).applyVersionFilter(
-            null,
-            routePathMetadata,
-            handler,
-          );
-
-          const req = { headers: { 'X-API-Version': '1' } };
-          const res = {};
-          const next = sinon.stub();
-
-          versionFilter(req, res, next);
-
-          expect(handler.calledWith(req, res, next)).to.be.true;
-        });
-      });
-
-      describe('when the handler version is a string', () => {
-        it('should return next if the version in the Custom Header does not match the handler version', () => {
-          const version = '1';
-          const versioningOptions: VersioningOptions = {
-            type: VersioningType.HEADER,
-            header: 'X-API-Version',
-          };
-          const handler = sinon.stub();
-
-          const routePathMetadata: RoutePathMetadata = {
-            methodVersion: version,
-            versioningOptions,
-          };
-          const versionFilter = (routerBuilder as any).applyVersionFilter(
-            null,
-            routePathMetadata,
-            handler,
-          );
-
-          const req = { headers: { 'X-API-Version': '3' } };
-          const res = {};
-          const next = sinon.stub();
-
-          versionFilter(req, res, next);
-
-          expect(next.called).to.be.true;
-        });
-
-        it('should return the handler if the version in the Custom Header matches the handler version', () => {
-          const version = '1';
-          const versioningOptions: VersioningOptions = {
-            type: VersioningType.HEADER,
-            header: 'X-API-Version',
-          };
-          const handler = sinon.stub();
-
-          const routePathMetadata: RoutePathMetadata = {
-            methodVersion: version,
-            versioningOptions,
-          };
-          const versionFilter = (routerBuilder as any).applyVersionFilter(
-            null,
-            routePathMetadata,
-            handler,
-          );
-
-          const req = { headers: { 'X-API-Version': '1' } };
-          const res = {};
-          const next = sinon.stub();
-
-          versionFilter(req, res, next);
-
-          expect(handler.calledWith(req, res, next)).to.be.true;
-        });
-      });
-    });
-
-    describe('when versioning type is unrecognized', () => {
-      it('should throw an error if there is no next function', () => {
-        const version = '1';
-        const versioningOptions: any = {
-          type: 'UNKNOWN',
-        };
-        const handler = sinon.stub();
-
-        const routePathMetadata: RoutePathMetadata = {
-          methodVersion: version,
-          versioningOptions,
-        };
-        const versionFilter = (routerBuilder as any).applyVersionFilter(
-          null,
-          routePathMetadata,
-          handler,
-        );
-
-        const req = {};
-        const res = {};
-        const next = null;
-
-        expect(() => versionFilter(req, res, next)).to.throw(
-          'HTTP adapter does not support filtering on version',
-        );
-      });
-
-      it('should return next', () => {
-        const version = '1';
-        const versioningOptions: any = {
-          type: 'UNKNOWN',
-        };
-        const handler = sinon.stub();
-
-        const routePathMetadata: RoutePathMetadata = {
-          methodVersion: version,
-          versioningOptions,
-        };
-        const versionFilter = (routerBuilder as any).applyVersionFilter(
-          null,
-          routePathMetadata,
-          handler,
-        );
-
-        const req = {};
-        const res = {};
-        const next = sinon.stub();
-
-        versionFilter(req, res, next);
-
-        expect(next.called).to.be.true;
-      });
+          routePathMetadata.methodVersion,
+          routePathMetadata.versioningOptions,
+        ),
+      ).to.be.true;
+
+      expect(router.applyVersionFilter.returnValues[0]).to.be.equal(
+        versionFilter,
+      );
     });
   });
 });

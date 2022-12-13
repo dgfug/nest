@@ -12,13 +12,15 @@ import {
   VersioningType,
   WebSocketAdapter,
 } from '@nestjs/common';
-import { RouteInfo } from '@nestjs/common/interfaces';
+import {
+  RouteInfo,
+  GlobalPrefixOptions,
+  NestApplicationOptions,
+} from '@nestjs/common/interfaces';
 import {
   CorsOptions,
   CorsOptionsDelegate,
 } from '@nestjs/common/interfaces/external/cors-options.interface';
-import { GlobalPrefixOptions } from '@nestjs/common/interfaces/global-prefix-options.interface';
-import { NestApplicationOptions } from '@nestjs/common/interfaces/nest-application-options.interface';
 import { Logger } from '@nestjs/common/services/logger.service';
 import { loadPackage } from '@nestjs/common/utils/load-package.util';
 import {
@@ -40,6 +42,7 @@ import { MiddlewareModule } from './middleware/middleware-module';
 import { NestApplicationContext } from './nest-application-context';
 import { ExcludeRouteMetadata } from './router/interfaces/exclude-route-metadata.interface';
 import { Resolver } from './router/interfaces/resolver.interface';
+import { RoutePathFactory } from './router/route-path-factory';
 import { RoutesResolver } from './router/routes-resolver';
 
 const { SocketModule } = optionalRequire(
@@ -61,7 +64,7 @@ export class NestApplication
   private readonly logger = new Logger(NestApplication.name, {
     timestamp: true,
   });
-  private readonly middlewareModule = new MiddlewareModule();
+  private readonly middlewareModule: MiddlewareModule;
   private readonly middlewareContainer = new MiddlewareContainer(
     this.container,
   );
@@ -83,6 +86,7 @@ export class NestApplication
 
     this.selectContextModule();
     this.registerHttpServer();
+    this.middlewareModule = new MiddlewareModule(new RoutePathFactory(config));
 
     this.routesResolver = new RoutesResolver(
       this.container,
@@ -121,8 +125,7 @@ export class NestApplication
       return undefined;
     }
     const passCustomOptions =
-      isObject(this.appOptions.cors) ||
-      typeof this.appOptions.cors === 'function';
+      isObject(this.appOptions.cors) || isFunction(this.appOptions.cors);
     if (!passCustomOptions) {
       return this.enableCors();
     }
@@ -179,7 +182,9 @@ export class NestApplication
   }
 
   public registerParserMiddleware() {
-    this.httpAdapter.registerParserMiddleware();
+    const prefix = this.config.getGlobalPrefix();
+    const rawBody = !!this.appOptions?.rawBody;
+    this.httpAdapter.registerParserMiddleware(prefix, rawBody);
   }
 
   public async registerRouter() {
@@ -233,13 +238,6 @@ export class NestApplication
   public async startAllMicroservices(): Promise<this> {
     await Promise.all(this.microservices.map(msvc => msvc.listen()));
     return this;
-  }
-
-  public startAllMicroservicesAsync(): Promise<this> {
-    this.logger.warn(
-      'DEPRECATED! "startAllMicroservicesAsync" method is deprecated and will be removed in the next major release. Please, use "startAllMicroservices" instead.',
-    );
-    return this.startAllMicroservices();
   }
 
   public use(...args: [any, any?]): this {
@@ -300,18 +298,12 @@ export class NestApplication
     });
   }
 
-  public listenAsync(port: number | string, ...args: any[]): Promise<any> {
-    this.logger.warn(
-      'DEPRECATED! "listenAsync" method is deprecated and will be removed in the next major release. Please, use "listen" instead.',
-    );
-    return this.listen(port, ...(args as [any]));
-  }
-
   public async getUrl(): Promise<string> {
     return new Promise((resolve, reject) => {
       if (!this.isListening) {
         this.logger.error(MESSAGES.CALL_LISTEN_FIRST);
         reject(MESSAGES.CALL_LISTEN_FIRST);
+        return;
       }
       const address = this.httpServer.address();
       resolve(this.formatAddress(address));
@@ -319,13 +311,14 @@ export class NestApplication
   }
 
   private formatAddress(address: any): string {
-    if (typeof address === 'string') {
+    if (isString(address)) {
       if (platform() === 'win32') {
         return address;
       }
       const basePath = encodeURIComponent(address);
       return `${this.getProtocol()}+unix://${basePath}`;
     }
+
     let host = this.host();
     if (address && address.family === 'IPv6') {
       if (host === '::') {
@@ -410,7 +403,7 @@ export class NestApplication
   }
   private host(): string | undefined {
     const address = this.httpServer.address();
-    if (typeof address === 'string') {
+    if (isString(address)) {
       return undefined;
     }
     return address && address.address;

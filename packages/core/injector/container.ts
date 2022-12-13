@@ -3,13 +3,15 @@ import { GLOBAL_MODULE_METADATA } from '@nestjs/common/constants';
 import { Injectable } from '@nestjs/common/interfaces/injectable.interface';
 import { Type } from '@nestjs/common/interfaces/type.interface';
 import { ApplicationConfig } from '../application-config';
-import { CircularDependencyException } from '../errors/exceptions/circular-dependency.exception';
-import { UndefinedForwardRefException } from '../errors/exceptions/undefined-forwardref.exception';
-import { UnknownModuleException } from '../errors/exceptions/unknown-module.exception';
+import {
+  CircularDependencyException,
+  UndefinedForwardRefException,
+  UnknownModuleException,
+} from '../errors/exceptions';
 import { REQUEST } from '../router/request/request-constants';
 import { ModuleCompiler } from './compiler';
 import { ContextId } from './instance-wrapper';
-import { InternalCoreModule } from './internal-core-module';
+import { InternalCoreModule } from './internal-core-module/internal-core-module';
 import { InternalProvidersStorage } from './internal-providers-storage';
 import { Module } from './module';
 import { ModuleTokenFactory } from './module-token-factory';
@@ -154,13 +156,13 @@ export class NestContainer {
     provider: Provider,
     token: string,
   ): string | symbol | Function {
+    const moduleRef = this.modules.get(token);
     if (!provider) {
-      throw new CircularDependencyException();
+      throw new CircularDependencyException(moduleRef?.metatype.name);
     }
-    if (!this.modules.has(token)) {
+    if (!moduleRef) {
       throw new UnknownModuleException();
     }
-    const moduleRef = this.modules.get(token);
     return moduleRef.addProvider(provider);
   }
 

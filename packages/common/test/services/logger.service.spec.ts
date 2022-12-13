@@ -1,7 +1,7 @@
 import { expect } from 'chai';
 import 'reflect-metadata';
 import * as sinon from 'sinon';
-import { ConsoleLogger, Logger, LoggerService } from '../../services';
+import { ConsoleLogger, Logger, LoggerService, LogLevel } from '../../services';
 
 describe('Logger', () => {
   describe('[static methods]', () => {
@@ -518,6 +518,112 @@ describe('Logger', () => {
         expect(customLoggerErrorSpy.called).to.be.true;
         expect(customLoggerErrorSpy.calledWith(message, context)).to.be.true;
       });
+    });
+  });
+  describe('ConsoleLogger', () => {
+    let processStdoutWriteSpy: sinon.SinonSpy;
+
+    beforeEach(() => {
+      processStdoutWriteSpy = sinon.spy(process.stdout, 'write');
+    });
+    afterEach(() => {
+      processStdoutWriteSpy.restore();
+    });
+
+    it('should support custom formatter', () => {
+      class CustomConsoleLogger extends ConsoleLogger {
+        protected formatMessage(
+          logLevel: LogLevel,
+          message: unknown,
+          pidMessage: string,
+          formattedLogLevel: string,
+          contextMessage: string,
+          timestampDiff: string,
+        ) {
+          return `Prefix: ${message}`;
+        }
+      }
+
+      const consoleLogger = new CustomConsoleLogger();
+      consoleLogger.debug('test');
+
+      expect(processStdoutWriteSpy.firstCall.firstArg).to.equal(`Prefix: test`);
+    });
+
+    it('should support custom formatter and colorizer', () => {
+      class CustomConsoleLogger extends ConsoleLogger {
+        protected formatMessage(
+          logLevel: LogLevel,
+          message: unknown,
+          pidMessage: string,
+          formattedLogLevel: string,
+          contextMessage: string,
+          timestampDiff: string,
+        ) {
+          const strMessage = this.stringifyMessage(message, logLevel);
+          return `Prefix: ${strMessage}`;
+        }
+
+        protected colorize(message: string, logLevel: LogLevel): string {
+          return `~~~${message}~~~`;
+        }
+      }
+
+      const consoleLogger = new CustomConsoleLogger();
+      consoleLogger.debug('test');
+
+      expect(processStdoutWriteSpy.firstCall.firstArg).to.equal(
+        `Prefix: ~~~test~~~`,
+      );
+    });
+
+    it('should stringify messages', () => {
+      class CustomConsoleLogger extends ConsoleLogger {
+        protected colorize(message: string, _: LogLevel): string {
+          return message;
+        }
+      }
+
+      const consoleLogger = new CustomConsoleLogger();
+      const consoleLoggerSpy = sinon.spy(
+        consoleLogger,
+        'stringifyMessage' as keyof ConsoleLogger,
+      );
+      consoleLogger.debug(
+        'str1',
+        { key: 'str2' },
+        ['str3'],
+        [{ key: 'str4' }],
+        null,
+        1,
+      );
+
+      expect(consoleLoggerSpy.getCall(0).returnValue).to.equal('str1');
+      expect(consoleLoggerSpy.getCall(1).returnValue).to.equal(
+        `Object:
+{
+  "key": "str2"
+}
+`,
+      );
+      expect(consoleLoggerSpy.getCall(2).returnValue).to.equal(
+        `Object:
+[
+  "str3"
+]
+`,
+      );
+      expect(consoleLoggerSpy.getCall(3).returnValue).to.equal(
+        `Object:
+[
+  {
+    "key": "str4"
+  }
+]
+`,
+      );
+      expect(consoleLoggerSpy.getCall(4).returnValue).to.equal(null);
+      expect(consoleLoggerSpy.getCall(5).returnValue).to.equal(1);
     });
   });
 });

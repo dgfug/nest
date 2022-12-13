@@ -3,14 +3,16 @@ import {
   isString,
   isUndefined,
 } from '@nestjs/common/utils/shared.utils';
-import { Observable } from 'rxjs';
 import {
+  CONNECTION_FAILED_MESSAGE,
   CONNECT_EVENT,
+  CONNECT_FAILED_EVENT,
   DISCONNECTED_RMQ_MESSAGE,
   DISCONNECT_EVENT,
   NO_MESSAGE_HANDLER,
   RQM_DEFAULT_IS_GLOBAL_PREFETCH_COUNT,
   RQM_DEFAULT_NOACK,
+  RQM_DEFAULT_NO_ASSERT,
   RQM_DEFAULT_PREFETCH_COUNT,
   RQM_DEFAULT_QUEUE,
   RQM_DEFAULT_QUEUE_OPTIONS,
@@ -29,16 +31,20 @@ import { Server } from './server';
 
 let rqmPackage: any = {};
 
+const INFINITE_CONNECTION_ATTEMPTS = -1;
+
 export class ServerRMQ extends Server implements CustomTransportStrategy {
   public readonly transportId = Transport.RMQ;
 
   protected server: any = null;
   protected channel: any = null;
+  protected connectionAttempts = 0;
   protected readonly urls: string[] | RmqUrl[];
   protected readonly queue: string;
   protected readonly prefetchCount: number;
   protected readonly queueOptions: any;
   protected readonly isGlobalPrefetchCount: boolean;
+  protected readonly noAssert: boolean;
 
   constructor(protected readonly options: RmqOptions['options']) {
     super();
@@ -54,6 +60,8 @@ export class ServerRMQ extends Server implements CustomTransportStrategy {
     this.queueOptions =
       this.getOptionsProp(this.options, 'queueOptions') ||
       RQM_DEFAULT_QUEUE_OPTIONS;
+    this.noAssert =
+      this.getOptionsProp(this.options, 'noAssert') || RQM_DEFAULT_NO_ASSERT;
 
     this.loadPackage('amqplib', ServerRMQ.name, () => require('amqplib'));
     rqmPackage = this.loadPackage(
@@ -81,7 +89,9 @@ export class ServerRMQ extends Server implements CustomTransportStrategy {
     this.server && this.server.close();
   }
 
-  public async start(callback?: () => void) {
+  public async start(
+    callback?: (err?: unknown, ...optionalParams: unknown[]) => void,
+  ) {
     this.server = this.createClient();
     this.server.on(CONNECT_EVENT, () => {
       if (this.channel) {
@@ -92,9 +102,32 @@ export class ServerRMQ extends Server implements CustomTransportStrategy {
         setup: (channel: any) => this.setupChannel(channel, callback),
       });
     });
+
+    const maxConnectionAttempts = this.getOptionsProp(
+      this.options,
+      'maxConnectionAttempts',
+      INFINITE_CONNECTION_ATTEMPTS,
+    );
     this.server.on(DISCONNECT_EVENT, (err: any) => {
       this.logger.error(DISCONNECTED_RMQ_MESSAGE);
       this.logger.error(err);
+    });
+    this.server.on(CONNECT_FAILED_EVENT, (error: Record<string, unknown>) => {
+      this.logger.error(CONNECTION_FAILED_MESSAGE);
+      if (error?.err) {
+        this.logger.error(error.err);
+      }
+      const isReconnecting = !!this.channel;
+      if (
+        maxConnectionAttempts === INFINITE_CONNECTION_ATTEMPTS ||
+        isReconnecting
+      ) {
+        return;
+      }
+      if (++this.connectionAttempts === maxConnectionAttempts) {
+        this.close();
+        callback?.(error.err ?? new Error(CONNECTION_FAILED_MESSAGE));
+      }
     });
   }
 
@@ -110,7 +143,9 @@ export class ServerRMQ extends Server implements CustomTransportStrategy {
   public async setupChannel(channel: any, callback: Function) {
     const noAck = this.getOptionsProp(this.options, 'noAck', RQM_DEFAULT_NOACK);
 
-    await channel.assertQueue(this.queue, this.queueOptions);
+    if (!this.queueOptions.noAssert) {
+      await channel.assertQueue(this.queue, this.queueOptions);
+    }
     await channel.prefetch(this.prefetchCount, this.isGlobalPrefetchCount);
     channel.consume(
       this.queue,
@@ -130,8 +165,8 @@ export class ServerRMQ extends Server implements CustomTransportStrategy {
       return;
     }
     const { content, properties } = message;
-    const rawMessage = JSON.parse(content.toString());
-    const packet = await this.deserializer.deserialize(rawMessage);
+    const rawMessage = this.parseMessageContent(content);
+    const packet = await this.deserializer.deserialize(rawMessage, properties);
     const pattern = isString(packet.pattern)
       ? packet.pattern
       : JSON.stringify(packet.pattern);
@@ -157,7 +192,7 @@ export class ServerRMQ extends Server implements CustomTransportStrategy {
     }
     const response$ = this.transformToObservable(
       await handler(packet.data, rmqContext),
-    ) as Observable<any>;
+    );
 
     const publish = <T>(data: T) =>
       this.sendMessage(data, properties.replyTo, properties.correlationId);
@@ -182,5 +217,13 @@ export class ServerRMQ extends Server implements CustomTransportStrategy {
 
   protected initializeSerializer(options: RmqOptions['options']) {
     this.serializer = options?.serializer ?? new RmqRecordSerializer();
+  }
+
+  private parseMessageContent(content: Buffer) {
+    try {
+      return JSON.parse(content.toString());
+    } catch {
+      return content.toString();
+    }
   }
 }

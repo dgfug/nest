@@ -1,4 +1,4 @@
-import { Body, Controller, HttpCode, Post } from '@nestjs/common';
+import { Body, Controller, HttpCode, Post, Query } from '@nestjs/common';
 import {
   Client,
   ClientGrpc,
@@ -6,12 +6,28 @@ import {
   GrpcStreamCall,
   GrpcStreamMethod,
   Transport,
+  ClientGrpcProxy,
+  RpcException,
 } from '@nestjs/microservices';
 import { join } from 'path';
-import { Observable, of } from 'rxjs';
+import { Observable, of, catchError } from 'rxjs';
+
+class ErrorHandlingProxy extends ClientGrpcProxy {
+  serializeError(err) {
+    return new RpcException(err);
+  }
+}
 
 @Controller()
 export class GrpcController {
+  private readonly customClient: ClientGrpc;
+  constructor() {
+    this.customClient = new ErrorHandlingProxy({
+      package: 'math',
+      protoPath: join(__dirname, 'math.proto'),
+    });
+  }
+
   @Client({
     transport: Transport.GRPC,
     options: {
@@ -40,6 +56,14 @@ export class GrpcController {
     return svc.sum({ data });
   }
 
+  // Test that getService generate both lower and uppercase method
+  @Post('upperMethod/sum')
+  @HttpCode(200)
+  callWithOptions(@Body() data: number[]): Observable<number> {
+    const svc = this.client.getService<any>('Math');
+    return svc.Sum({ data });
+  }
+
   @GrpcMethod('Math')
   async sum({ data }: { data: number[] }): Promise<any> {
     return of({
@@ -50,16 +74,16 @@ export class GrpcController {
   @GrpcStreamMethod('Math')
   async sumStream(messages: Observable<any>): Promise<any> {
     return new Promise<any>((resolve, reject) => {
-      messages.subscribe(
-        msg => {
+      messages.subscribe({
+        next: msg => {
           resolve({
             result: msg.data.reduce((a, b) => a + b),
           });
         },
-        err => {
+        error: err => {
           reject(err);
         },
-      );
+      });
     });
   }
 
@@ -68,6 +92,19 @@ export class GrpcController {
     stream.on('data', (msg: any) => {
       stream.write({ result: msg.data.reduce((a, b) => a + b) });
     });
+  }
+
+  @GrpcMethod('Math')
+  async divide(request: { dividend: number; divisor: number }): Promise<any> {
+    if (request.divisor === 0) {
+      throw new RpcException({
+        code: 3,
+        message: 'dividing by 0 is not possible',
+      });
+    }
+    return {
+      result: request.dividend / request.divisor,
+    };
   }
 
   @GrpcMethod('Math2')
@@ -89,5 +126,25 @@ export class GrpcController {
   callMultiSum2(@Body() data: number[]): Observable<number> {
     const svc = this.clientMulti.getService<any>('Math2');
     return svc.sum2({ data });
+  }
+
+  @Post('error')
+  @HttpCode(200)
+  serializeError(
+    @Query('client') query: 'custom' | 'standard' = 'standard',
+    @Body() body: Record<string, any>,
+  ): Observable<boolean> {
+    const client = query === 'custom' ? this.customClient : this.client;
+    const svc = client.getService<any>('Math');
+
+    const errorDivideRequest = {
+      dividend: 1,
+      divisor: 0,
+    };
+    return svc.divide(errorDivideRequest).pipe(
+      catchError(err => {
+        return of(err instanceof RpcException);
+      }),
+    );
   }
 }

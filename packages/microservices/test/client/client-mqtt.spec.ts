@@ -1,5 +1,5 @@
 import { expect } from 'chai';
-import { empty } from 'rxjs';
+import { EMPTY } from 'rxjs';
 import * as sinon from 'sinon';
 import { ClientMqtt } from '../../client/client-mqtt';
 import { ERROR_EVENT } from '../../constants';
@@ -110,7 +110,7 @@ describe('ClientMqtt', () => {
       it('should unsubscribe to response pattern name', () => {
         expect(unsubscribeSpy.calledWith(channel)).to.be.true;
       });
-      it('should remove callback from routin map', () => {
+      it('should remove callback from routing map', () => {
         expect(client['routingMap'].has(id)).to.be.false;
       });
     });
@@ -311,9 +311,9 @@ describe('ClientMqtt', () => {
         on: (ev, callback) => callback(error),
         off: () => ({}),
       };
-      client
-        .mergeCloseEvent(instance as any, empty())
-        .subscribe(null, (err: any) => expect(err).to.be.eql(error));
+      client.mergeCloseEvent(instance as any, EMPTY).subscribe({
+        error: (err: any) => expect(err).to.be.eql(error),
+      });
     });
   });
   describe('handleError', () => {

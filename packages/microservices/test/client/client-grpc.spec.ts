@@ -129,10 +129,10 @@ describe('ClientGrpcProxy', () => {
 
       it('should call native method', () => {
         const spy = sinon.spy(obj, methodName);
-        stream$.subscribe(
-          () => ({}),
-          () => ({}),
-        );
+        stream$.subscribe({
+          next: () => ({}),
+          error: () => ({}),
+        });
 
         expect(spy.called).to.be.true;
       });
@@ -156,10 +156,10 @@ describe('ClientGrpcProxy', () => {
 
       it('should subscribe to request upstream', () => {
         const upstreamSubscribe = sinon.spy(upstream, 'subscribe');
-        stream$.subscribe(
-          () => ({}),
-          () => ({}),
-        );
+        stream$.subscribe({
+          next: () => ({}),
+          error: () => ({}),
+        });
         upstream.next({ test: true });
 
         expect(writeSpy.called).to.be.true;
@@ -201,7 +201,12 @@ describe('ClientGrpcProxy', () => {
 
       it('propagates server errors', () => {
         const err = new Error('something happened');
-        stream$.subscribe(dataSpy, errorSpy, completeSpy);
+        stream$.subscribe({
+          next: dataSpy,
+          error: errorSpy,
+          complete: completeSpy,
+        });
+
         eventCallbacks.data('a');
         eventCallbacks.data('b');
         callMock.finished = true;
@@ -219,7 +224,11 @@ describe('ClientGrpcProxy', () => {
         const grpcServerCancelErrMock = {
           details: 'Cancelled',
         };
-        const subscription = stream$.subscribe(dataSpy, errorSpy);
+        const subscription = stream$.subscribe({
+          next: dataSpy,
+          error: errorSpy,
+        });
+
         eventCallbacks.data('a');
         eventCallbacks.data('b');
         subscription.unsubscribe();
@@ -248,7 +257,15 @@ describe('ClientGrpcProxy', () => {
     });
     describe('on subscribe', () => {
       const methodName = 'm';
-      const obj = { [methodName]: callback => callback(null, {}) };
+      const obj = {
+        [methodName]: callback => {
+          callback(null, {});
+
+          return {
+            finished: true,
+          };
+        },
+      };
 
       let stream$: Observable<any>;
 
@@ -258,10 +275,10 @@ describe('ClientGrpcProxy', () => {
 
       it('should call native method', () => {
         const spy = sinon.spy(obj, methodName);
-        stream$.subscribe(
-          () => ({}),
-          () => ({}),
-        );
+        stream$.subscribe({
+          next: () => ({}),
+          error: () => ({}),
+        });
 
         expect(spy.called).to.be.true;
       });
@@ -298,14 +315,55 @@ describe('ClientGrpcProxy', () => {
 
       it('should subscribe to request upstream', () => {
         const upstreamSubscribe = sinon.spy(upstream, 'subscribe');
-        stream$.subscribe(
-          () => ({}),
-          () => ({}),
-        );
+        stream$.subscribe({
+          next: () => ({}),
+          error: () => ({}),
+        });
         upstream.next({ test: true });
 
         expect(writeSpy.called).to.be.true;
         expect(upstreamSubscribe.called).to.be.true;
+      });
+    });
+
+    describe('flow-control', () => {
+      it('should cancel call on client unsubscribe', () => {
+        const methodName = 'm';
+
+        const dataSpy = sinon.spy();
+        const errorSpy = sinon.spy();
+        const completeSpy = sinon.spy();
+
+        const callMock = {
+          cancel: sinon.spy(),
+          finished: false,
+        };
+
+        let handler: (error: any, data: any) => void;
+
+        const obj = {
+          [methodName]: (callback, ...args) => {
+            handler = callback;
+
+            return callMock;
+          },
+        };
+
+        const stream$ = client.createUnaryServiceMethod(obj, methodName)();
+
+        const subsciption = stream$.subscribe({
+          next: dataSpy,
+          error: errorSpy,
+          complete: completeSpy,
+        });
+
+        subsciption.unsubscribe();
+        handler(null, 'a');
+
+        expect(dataSpy.called).to.be.false;
+        expect(errorSpy.called).to.be.false;
+        expect(completeSpy.called).to.be.false;
+        expect(callMock.cancel.called).to.be.true;
       });
     });
   });

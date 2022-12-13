@@ -1,8 +1,12 @@
 import { Provider } from '../interfaces';
 import { loadPackage } from '../utils/load-package.util';
-import { CACHE_MANAGER, CACHE_MODULE_OPTIONS } from './cache.constants';
+import { CACHE_MANAGER } from './cache.constants';
+import { MODULE_OPTIONS_TOKEN } from './cache.module-definition';
 import { defaultCacheOptions } from './default-options';
-import { CacheManagerOptions } from './interfaces/cache-manager.interface';
+import {
+  CacheManagerOptions,
+  CacheStore,
+} from './interfaces/cache-manager.interface';
 
 /**
  * Creates a CacheManager Provider.
@@ -12,25 +16,46 @@ import { CacheManagerOptions } from './interfaces/cache-manager.interface';
 export function createCacheManager(): Provider {
   return {
     provide: CACHE_MANAGER,
-    useFactory: (options: CacheManagerOptions) => {
+    useFactory: async (options: CacheManagerOptions) => {
       const cacheManager = loadPackage('cache-manager', 'CacheModule', () =>
         require('cache-manager'),
       );
+      const cacheManagerIsv5OrGreater = 'memoryStore' in cacheManager;
+      const cachingFactory = async (
+        store: CacheManagerOptions['store'],
+        options: Omit<CacheManagerOptions, 'store'>,
+      ): Promise<Record<string, any>> => {
+        if (!cacheManagerIsv5OrGreater) {
+          return cacheManager.caching({
+            ...defaultCacheOptions,
+            ...{ ...options, store },
+          });
+        }
+        let cache: string | Function | CacheStore = 'memory';
+        defaultCacheOptions.ttl *= 1000;
+        if (typeof store === 'object') {
+          if ('create' in store) {
+            cache = store.create;
+          } else {
+            cache = store;
+          }
+        } else if (typeof store === 'function') {
+          cache = store;
+        }
+        return cacheManager.caching(cache, {
+          ...defaultCacheOptions,
+          ...options,
+        });
+      };
 
       return Array.isArray(options)
         ? cacheManager.multiCaching(
-            options.map(store =>
-              cacheManager.caching({
-                ...defaultCacheOptions,
-                ...(store || {}),
-              }),
+            await Promise.all(
+              options.map(option => cachingFactory(option.store, option)),
             ),
           )
-        : cacheManager.caching({
-            ...defaultCacheOptions,
-            ...(options || {}),
-          });
+        : cachingFactory(options.store, options);
     },
-    inject: [CACHE_MODULE_OPTIONS],
+    inject: [MODULE_OPTIONS_TOKEN],
   };
 }

@@ -1,5 +1,5 @@
 import { Logger } from '@nestjs/common';
-import { expect } from 'chai';
+import { AssertionError, expect } from 'chai';
 import * as sinon from 'sinon';
 import { NO_MESSAGE_HANDLER } from '../../constants';
 import { KafkaHeaders } from '../../enums';
@@ -26,6 +26,8 @@ describe('ServerKafka', () => {
   const key = '1';
   const timestamp = new Date().toISOString();
   const messageValue = 'test-message';
+  const heartbeat = async () => {};
+  const pause = () => () => {};
 
   const eventMessage: KafkaMessage = {
     key: Buffer.from(key),
@@ -44,6 +46,8 @@ describe('ServerKafka', () => {
       },
       eventMessage,
     ),
+    heartbeat,
+    pause,
   };
 
   const eventWithCorrelationIdPayload: EachMessagePayload = {
@@ -57,6 +61,8 @@ describe('ServerKafka', () => {
       },
       eventMessage,
     ),
+    heartbeat,
+    pause,
   };
 
   const message: KafkaMessage = Object.assign(
@@ -73,6 +79,8 @@ describe('ServerKafka', () => {
     topic,
     partition: 0,
     message,
+    heartbeat,
+    pause,
   };
 
   let server: ServerKafka;
@@ -277,16 +285,75 @@ describe('ServerKafka', () => {
 
       sinon.stub(server, 'getPublisher').callsFake(() => getPublisherSpy);
     });
+
     it('should call "handleEvent" if correlation identifier is not present', async () => {
       const handleEventSpy = sinon.spy(server, 'handleEvent');
       await server.handleMessage(eventPayload);
       expect(handleEventSpy.called).to.be.true;
     });
 
-    it('should call "handleEvent" if correlation identifier is present by the reply topic is not present', async () => {
+    it('should call "handleEvent" if correlation identifier is present but the reply topic is not present', async () => {
       const handleEventSpy = sinon.spy(server, 'handleEvent');
       await server.handleMessage(eventWithCorrelationIdPayload);
       expect(handleEventSpy.called).to.be.true;
+    });
+
+    it('should call event handler when "handleEvent" is called', async () => {
+      const messageHandler = sinon.mock();
+      const context = { test: true } as any;
+      const messageData = 'some data';
+      sinon.stub(server, 'getHandlerByPattern').callsFake(() => messageHandler);
+
+      await server.handleEvent(
+        topic,
+        { data: messageData, pattern: topic },
+        context,
+      );
+      expect(messageHandler.calledWith(messageData, context)).to.be.true;
+    });
+
+    it('should not catch error thrown by event handler as part of "handleEvent"', async () => {
+      const error = new Error('handler error');
+      const messageHandler = sinon.mock().throwsException(error);
+      sinon.stub(server, 'getHandlerByPattern').callsFake(() => messageHandler);
+
+      try {
+        await server.handleEvent(
+          topic,
+          { data: 'some data', pattern: topic },
+          {} as any,
+        );
+
+        // code should not be executed
+        expect(true).to.be.false;
+      } catch (e) {
+        if (e instanceof AssertionError) {
+          throw e;
+        }
+        expect(e).to.be.eq(error);
+      }
+    });
+
+    it('should call "handleEvent" if correlation identifier and reply topic are present but the handler is of type eventHandler', async () => {
+      const handler = sinon.spy();
+      (handler as any).isEventHandler = true;
+      (server as any).messageHandlers = objectToMap({
+        [topic]: handler,
+      });
+      const handleEventSpy = sinon.spy(server, 'handleEvent');
+      await server.handleMessage(payload);
+      expect(handleEventSpy.called).to.be.true;
+    });
+
+    it('should NOT call "handleEvent" if correlation identifier and reply topic are present but the handler is not of type eventHandler', async () => {
+      const handler = sinon.spy();
+      (handler as any).isEventHandler = false;
+      (server as any).messageHandlers = objectToMap({
+        [topic]: handler,
+      });
+      const handleEventSpy = sinon.spy(server, 'handleEvent');
+      await server.handleMessage(payload);
+      expect(handleEventSpy.called).to.be.false;
     });
 
     it(`should publish NO_MESSAGE_HANDLER if pattern not exists in messageHandlers object`, async () => {
@@ -298,6 +365,7 @@ describe('ServerKafka', () => {
         }),
       ).to.be.true;
     });
+
     it(`should call handler with expected arguments`, async () => {
       const handler = sinon.spy();
       (server as any).messageHandlers = objectToMap({
@@ -319,8 +387,8 @@ describe('ServerKafka', () => {
       });
     });
 
-    it('should send message', () => {
-      server.sendMessage(
+    it('should send message', async () => {
+      await server.sendMessage(
         {
           id: correlationId,
           response: messageValue,
@@ -345,8 +413,8 @@ describe('ServerKafka', () => {
         }),
       ).to.be.true;
     });
-    it('should send message without reply partition', () => {
-      server.sendMessage(
+    it('should send message without reply partition', async () => {
+      await server.sendMessage(
         {
           id: correlationId,
           response: messageValue,
@@ -370,8 +438,8 @@ describe('ServerKafka', () => {
         }),
       ).to.be.true;
     });
-    it('should send error message', () => {
-      server.sendMessage(
+    it('should send error message', async () => {
+      await server.sendMessage(
         {
           id: correlationId,
           err: NO_MESSAGE_HANDLER,
@@ -397,8 +465,8 @@ describe('ServerKafka', () => {
         }),
       ).to.be.true;
     });
-    it('should send `isDisposed` message', () => {
-      server.sendMessage(
+    it('should send `isDisposed` message', async () => {
+      await server.sendMessage(
         {
           id: correlationId,
           isDisposed: true,

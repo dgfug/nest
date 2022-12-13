@@ -5,7 +5,15 @@ node_modules/
 /.idea
 /.awcache
 /.vscode
+/.devcontainer
 *.code-workspace
+
+# Vim
+[._]*.s[a-v][a-z]
+[._]*.sw[a-p]
+[._]s[a-rt-v][a-z]
+[._]ss[a-gi-z]
+[._]sw[a-p]
 
 # bundle
 packages/**/*.d.ts
@@ -19,6 +27,7 @@ yarn-error.log
 /**/npm-debug.log
 /packages/**/.npmignore
 /packages/**/LICENSE
+*.tsbuildinfo
 
 # example
 /quick-start

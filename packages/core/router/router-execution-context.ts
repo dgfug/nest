@@ -7,7 +7,7 @@ import {
   RequestMethod,
 } from '@nestjs/common';
 import {
-  CUSTOM_ROUTE_AGRS_METADATA,
+  CUSTOM_ROUTE_ARGS_METADATA,
   HEADERS_METADATA,
   HTTP_CODE_METADATA,
   REDIRECT_METADATA,
@@ -21,9 +21,11 @@ import { ContextType, Controller } from '@nestjs/common/interfaces';
 import { isEmpty, isString } from '@nestjs/common/utils/shared.utils';
 import { IncomingMessage } from 'http';
 import { Observable } from 'rxjs';
-import { FORBIDDEN_MESSAGE } from '../guards/constants';
-import { GuardsConsumer } from '../guards/guards-consumer';
-import { GuardsContextCreator } from '../guards/guards-context-creator';
+import {
+  FORBIDDEN_MESSAGE,
+  GuardsConsumer,
+  GuardsContextCreator,
+} from '../guards';
 import { ContextUtils } from '../helpers/context-utils';
 import { ExecutionContextHost } from '../helpers/execution-context-host';
 import {
@@ -297,7 +299,7 @@ export class RouterExecutionContext {
       );
       const type = this.contextUtils.mapParamType(key);
 
-      if (key.includes(CUSTOM_ROUTE_AGRS_METADATA)) {
+      if (key.includes(CUSTOM_ROUTE_ARGS_METADATA)) {
         const { factory } = metadata[key];
         const customExtractValue = this.contextUtils.getCustomFactory(
           factory,
@@ -424,14 +426,14 @@ export class RouterExecutionContext {
         );
       };
     }
-    if (redirectResponse && typeof redirectResponse.url === 'string') {
+    if (redirectResponse && isString(redirectResponse.url)) {
       return async <TResult, TResponse>(result: TResult, res: TResponse) => {
         await this.responseController.redirect(result, res, redirectResponse);
       };
     }
     const isSseHandler = !!this.reflectSse(callback);
     if (isSseHandler) {
-      return async <
+      return <
         TResult extends Observable<unknown> = any,
         TResponse extends HeaderStream = any,
         TRequest extends IncomingMessage = any,
@@ -440,10 +442,11 @@ export class RouterExecutionContext {
         res: TResponse,
         req: TRequest,
       ) => {
-        await this.responseController.sse(
+        this.responseController.sse(
           result,
           (res as any).raw || res,
           (req as any).raw || req,
+          { additionalHeaders: res.getHeaders?.() },
         );
       };
     }
@@ -451,6 +454,7 @@ export class RouterExecutionContext {
       result = await this.responseController.transformToResult(result);
       !isResponseHandled &&
         (await this.responseController.apply(result, res, httpStatusCode));
+      return res;
     };
   }
 
